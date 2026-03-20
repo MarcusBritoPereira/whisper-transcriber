@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Transcriber</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Audio Transcriber</h1>
+            <p>Powered by OpenAI Whisper</p>
+        </header>
+        
+        <main>
+            <div id="drop-zone" class="drop-zone">
+                <div class="drop-zone-content">
+                    <svg class="upl-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    <p>Arraste seu áudio aqui ou clique para selecionar</p>
+                    <input type="file" id="file-input" accept="audio/*" hidden>
+                </div>
+            </div>
+
+            <div id="status-container" class="hidden">
+                <div class="loader"></div>
+                <p id="status-text">Processando áudio...</p>
+            </div>
+
+            <div id="result-container" class="hidden">
+                <div class="result-header">
+                    <h3>Transcrição</h3>
+                    <button id="copy-btn">Copiar</button>
+                </div>
+                <div id="transcription-text" class="transcription-box"></div>
+            </div>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
