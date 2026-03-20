@@ -1,25 +1,52 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Header, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse, JSONResponse
 import shutil
 import os
 import uuid
-import asyncio
+import json
+import time
+import sqlite3
+import threading
+import queue
+import logging
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 from services.transcriber import transcriber_service
 from pydantic import BaseModel
 from typing import List, Optional
 
-app = FastAPI(title="UPscribe API")
+APP_TITLE = "UPscribe API"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "temp_uploads")
+RESULTS_DIR = os.getenv("RESULTS_DIR", "results")
+DB_PATH = os.getenv("DB_PATH", "transcriptions.db")
+MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "200"))
+DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "pt")
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+API_KEYS = {k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()}
+ALLOWED_DOWNLOAD_DOMAINS = {d.strip() for d in os.getenv("ALLOWED_DOWNLOAD_DOMAINS", "youtube.com,youtu.be,vimeo.com,tiktok.com").split(",") if d.strip()}
+RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "20"))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title=APP_TITLE)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = "temp_uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+_job_queue: "queue.Queue[str]" = queue.Queue()
+_rate_limit_window: dict[str, list[float]] = {}
+_rate_limit_lock = threading.Lock()
+
 
 class TranscriptionResponse(BaseModel):
     text: str
@@ -27,78 +54,356 @@ class TranscriptionResponse(BaseModel):
     segments: List[dict]
     diarized: bool
 
+
 class TranslateRequest(BaseModel):
     text: str
     target_language: str
 
+
 class SummarizeRequest(BaseModel):
     text: str
 
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def db_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    conn = db_conn()
+    with conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                input_path TEXT,
+                request_json TEXT,
+                result_json TEXT,
+                error TEXT
+            )
+            """
+        )
+    conn.close()
+
+
+def insert_job(job_id: str, input_path: str, request_payload: dict) -> None:
+    now = utc_now_iso()
+    conn = db_conn()
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs(id, status, created_at, updated_at, input_path, request_json) VALUES(?,?,?,?,?,?)",
+            (job_id, "queued", now, now, input_path, json.dumps(request_payload, ensure_ascii=False)),
+        )
+    conn.close()
+
+
+def update_job(job_id: str, status: str, result: Optional[dict] = None, error: Optional[str] = None) -> None:
+    conn = db_conn()
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status=?, updated_at=?, result_json=?, error=? WHERE id=?",
+            (status, utc_now_iso(), json.dumps(result, ensure_ascii=False) if result else None, error, job_id),
+        )
+    conn.close()
+
+
+def get_job(job_id: str) -> Optional[sqlite3.Row]:
+    conn = db_conn()
+    row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def remove_local_file(path: Optional[str]) -> None:
+    if path and os.path.exists(path):
+        os.remove(path)
+
+
+def validate_api_key(x_api_key: Optional[str]) -> None:
+    if not API_KEYS:
+        return
+    if not x_api_key or x_api_key not in API_KEYS:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def check_rate_limit(client_id: str) -> None:
+    now = time.time()
+    with _rate_limit_lock:
+        window = _rate_limit_window.setdefault(client_id, [])
+        one_min_ago = now - 60
+        window[:] = [t for t in window if t >= one_min_ago]
+        if len(window) >= RATE_LIMIT_PER_MIN:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        window.append(now)
+
+
+def allowed_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = parsed.hostname or ""
+    return any(host == d or host.endswith(f".{d}") for d in ALLOWED_DOWNLOAD_DOMAINS)
+
+
+def format_timestamp(seconds: float, srt: bool = False) -> str:
+    ms = int((seconds - int(seconds)) * 1000)
+    s = int(seconds)
+    h = s // 3600
+    m = (s % 3600) // 60
+    sec = s % 60
+    sep = "," if srt else "."
+    return f"{h:02d}:{m:02d}:{sec:02d}{sep}{ms:03d}"
+
+
+def to_srt(segments: list[dict]) -> str:
+    out = []
+    for idx, seg in enumerate(segments, start=1):
+        start = format_timestamp(float(seg.get("start", 0)), srt=True)
+        end = format_timestamp(float(seg.get("end", 0)), srt=True)
+        speaker = seg.get("speaker")
+        text = seg.get("text", "").strip()
+        line = f"{speaker}: {text}" if speaker else text
+        out.append(f"{idx}\n{start} --> {end}\n{line}\n")
+    return "\n".join(out)
+
+
+def to_vtt(segments: list[dict]) -> str:
+    out = ["WEBVTT\n"]
+    for seg in segments:
+        start = format_timestamp(float(seg.get("start", 0)))
+        end = format_timestamp(float(seg.get("end", 0)))
+        speaker = seg.get("speaker")
+        text = seg.get("text", "").strip()
+        line = f"<v {speaker}>{text}" if speaker else text
+        out.append(f"{start} --> {end}\n{line}\n")
+    return "\n".join(out)
+
+
+def process_job(job_id: str) -> None:
+    row = get_job(job_id)
+    if not row:
+        return
+
+    req = json.loads(row["request_json"])
+    update_job(job_id, "processing")
+
+    try:
+        result = transcriber_service.transcribe(
+            row["input_path"],
+            diarize=req.get("diarize", False),
+            translate=req.get("translate", False),
+            restore_audio=req.get("restore_audio", False),
+            mode=req.get("mode", "rapido"),
+            language=req.get("language", DEFAULT_LANGUAGE),
+        )
+        update_job(job_id, "completed", result=result)
+    except Exception as exc:
+        logger.exception("Job failed", extra={"job_id": job_id})
+        update_job(job_id, "failed", error=str(exc))
+    finally:
+        remove_local_file(row["input_path"])
+
+
+def worker() -> None:
+    while True:
+        job_id = _job_queue.get()
+        try:
+            process_job(job_id)
+        finally:
+            _job_queue.task_done()
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    logger.info("service_started", extra={"app": APP_TITLE})
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "time": utc_now_iso()}
+
+
+@app.get("/readyz")
+def readyz():
+    conn = db_conn()
+    conn.execute("SELECT 1")
+    conn.close()
+    return {"status": "ready"}
+
+
 @app.post("/transcribe", response_model=TranscriptionResponse)
-async def transcribe_audio(
+async def transcribe_audio_sync(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
     diarize: bool = Form(False),
-    language: str = Form("pt"),
+    language: str = Form(DEFAULT_LANGUAGE),
     translate: bool = Form(False),
     restore_audio: bool = Form(False),
-    mode: str = Form("rapido")
+    mode: str = Form("rapido"),
+    x_api_key: Optional[str] = Header(None),
 ):
+    validate_api_key(x_api_key)
+    check_rate_limit(request.client.host if request.client else "unknown")
+
     if not file and not url:
         raise HTTPException(status_code=400, detail="Either file or url must be provided")
+
     file_id = str(uuid.uuid4())
     temp_path = ""
-    
+
     if file:
+        if file.size and file.size > MAX_FILE_MB * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"File too large (max {MAX_FILE_MB}MB)")
+
         allowed_extensions = (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".opus", ".mp4", ".mpeg", ".webm")
-        if not file.filename.lower().endswith(allowed_extensions) and not file.content_type.startswith("audio/"):
+        filename = file.filename or "audio"
+        if not filename.lower().endswith(allowed_extensions) and not (file.content_type or "").startswith(("audio/", "video/")):
             raise HTTPException(status_code=400, detail=f"Invalid file type: {file.content_type}")
-            
-        ext = os.path.splitext(file.filename)[1]
-        if not ext:
-            ext = ".mp3"
+
+        ext = os.path.splitext(filename)[1] or ".mp3"
         temp_path = os.path.join(UPLOAD_DIR, f"{file_id}{ext}")
-        
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-    elif url:
-        temp_path = os.path.join(UPLOAD_DIR, f"{file_id}.%(ext)s")
-        # yt-dlp logic is handled by the transcriber service, which will return the actual path
-        temp_path = transcriber_service.download_from_url(url, temp_path)
-    
+    else:
+        if not allowed_url(url or ""):
+            raise HTTPException(status_code=400, detail="URL domain is not allowed")
+        temp_template = os.path.join(UPLOAD_DIR, f"{file_id}.%(ext)s")
+        temp_path = transcriber_service.download_from_url(url or "", temp_template)
+
     if not temp_path or not os.path.exists(temp_path):
         raise HTTPException(status_code=500, detail="Error retrieving audio file.")
-    
+
     try:
         result = transcriber_service.transcribe(
-            temp_path, 
-            diarize=diarize, 
-            translate=translate, 
+            temp_path,
+            diarize=diarize,
+            translate=translate,
             restore_audio=restore_audio,
             mode=mode,
-            language=language
+            language=language,
         )
         return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        remove_local_file(temp_path)
+
+
+@app.post("/jobs/transcribe")
+async def transcribe_audio_job(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    diarize: bool = Form(False),
+    language: str = Form(DEFAULT_LANGUAGE),
+    translate: bool = Form(False),
+    restore_audio: bool = Form(False),
+    mode: str = Form("rapido"),
+    x_api_key: Optional[str] = Header(None),
+):
+    validate_api_key(x_api_key)
+    check_rate_limit(request.client.host if request.client else "unknown")
+
+    if not file and not url:
+        raise HTTPException(status_code=400, detail="Either file or url must be provided")
+
+    job_id = str(uuid.uuid4())
+    input_path = ""
+
+    if file:
+        filename = file.filename or "audio"
+        ext = os.path.splitext(filename)[1] or ".mp3"
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}{ext}")
+        with open(input_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    else:
+        if not allowed_url(url or ""):
+            raise HTTPException(status_code=400, detail="URL domain is not allowed")
+        input_template = os.path.join(UPLOAD_DIR, f"{job_id}.%(ext)s")
+        input_path = transcriber_service.download_from_url(url or "", input_template)
+
+    payload = {
+        "diarize": diarize,
+        "language": language,
+        "translate": translate,
+        "restore_audio": restore_audio,
+        "mode": mode,
+    }
+
+    insert_job(job_id, input_path, payload)
+    _job_queue.put(job_id)
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/jobs/{job_id}")
+def job_status(job_id: str, x_api_key: Optional[str] = Header(None)):
+    validate_api_key(x_api_key)
+    row = get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "job_id": row["id"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "error": row["error"],
+    }
+
+
+@app.get("/jobs/{job_id}/result")
+def job_result(
+    job_id: str,
+    format: str = Query("json", pattern="^(json|txt|srt|vtt)$"),
+    x_api_key: Optional[str] = Header(None),
+):
+    validate_api_key(x_api_key)
+    row = get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if row["status"] != "completed":
+        raise HTTPException(status_code=409, detail=f"Job status is {row['status']}")
+
+    result = json.loads(row["result_json"])
+    segments = result.get("segments", [])
+
+    if format == "json":
+        return JSONResponse(content=result)
+    if format == "txt":
+        return PlainTextResponse(result.get("text", ""), media_type="text/plain")
+    if format == "srt":
+        return PlainTextResponse(to_srt(segments), media_type="text/plain")
+    if format == "vtt":
+        return PlainTextResponse(to_vtt(segments), media_type="text/vtt")
+    raise HTTPException(status_code=400, detail="Unsupported format")
+
 
 @app.post("/translate_text")
 async def translate_text_endpoint(req: TranslateRequest):
     try:
         from deep_translator import GoogleTranslator
-        translator = GoogleTranslator(source='auto', target=req.target_language)
-        
-        # handle length limits
+
+        translator = GoogleTranslator(source="auto", target=req.target_language)
+
         chunk_size = 4000
-        chunks = [req.text[i:i+chunk_size] for i in range(0, len(req.text), chunk_size)]
+        chunks = [req.text[i:i + chunk_size] for i in range(0, len(req.text), chunk_size)]
         translated_chunks = [translator.translate(chunk) for chunk in chunks]
-        
+
         return {"translated_text": " ".join(translated_chunks)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @app.post("/summarize")
 async def summarize_endpoint(req: SummarizeRequest):
@@ -106,58 +411,58 @@ async def summarize_endpoint(req: SummarizeRequest):
         from sumy.parsers.plaintext import PlaintextParser
         from sumy.nlp.tokenizers import Tokenizer
         from sumy.summarizers.lsa import LsaSummarizer
-        
-        # For simplicity, fallback to Portuguese tokenizer
+
         parser = PlaintextParser.from_string(req.text, Tokenizer("portuguese"))
         summarizer = LsaSummarizer()
-        
-        # Summarize to 3 sentences
+
         sentences = summarizer(parser.document, 4)
         summary = " ".join(str(s) for s in sentences)
-        
+
         if not summary.strip():
             summary = req.text[:500] + "..." if len(req.text) > 500 else req.text
-            
+
         return {"summary": summary}
-    except Exception as e:
-        print(f"Summary error: {e}")
+    except Exception as exc:
+        logger.warning("summary_error=%s", exc)
         return {"summary": req.text[:500] + "..." if len(req.text) > 500 else req.text}
+
 
 @app.websocket("/ws/transcribe")
 async def websocket_transcribe(websocket: WebSocket):
     await websocket.accept()
-    print("WebSocket connected")
-    
+    logger.info("websocket_connected")
+
+    rolling_buffer = []
+    max_chunks = 4
+
     try:
         while True:
-            # Receive audio chunk (binary)
             data = await websocket.receive_bytes()
-            
-            # Temporary save chunk to disk for Whisper (Whisper needs a file/buffer)
             chunk_id = str(uuid.uuid4())
             chunk_path = os.path.join(UPLOAD_DIR, f"chunk_{chunk_id}.wav")
-            
-            with open(chunk_path, "wb") as f:
-                f.write(data)
-            
-            try:
-                # Transcribe small chunk
-                # Note: In a real scenario, we'd use a rolling buffer
-                result = transcriber_service.transcribe(chunk_path, diarize=False)
-                await websocket.send_json({
-                    "text": result["text"],
-                    "partial": True
-                })
-            finally:
-                if os.path.exists(chunk_path):
-                    os.remove(chunk_path)
-                    
+
+            with open(chunk_path, "wb") as file_obj:
+                file_obj.write(data)
+
+            rolling_buffer.append(chunk_path)
+            if len(rolling_buffer) > max_chunks:
+                old = rolling_buffer.pop(0)
+                remove_local_file(old)
+
+            result = transcriber_service.transcribe(chunk_path, diarize=False)
+            await websocket.send_json({"text": result["text"], "partial": True})
+
     except WebSocketDisconnect:
-        print("WebSocket disconnected")
-    except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.info("websocket_disconnected")
+    except Exception as exc:
+        logger.exception("websocket_error=%s", exc)
         await websocket.close()
+    finally:
+        for path in rolling_buffer:
+            remove_local_file(path)
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
