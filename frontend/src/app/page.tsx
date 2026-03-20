@@ -90,6 +90,8 @@ export default function HomePage() {
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
 
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
   React.useEffect(() => {
     if (file) {
       const url = URL.createObjectURL(file);
@@ -186,7 +188,7 @@ export default function HomePage() {
     formData.append("mode", transcribeMode);
 
     try {
-      const response = await axios.post("http://localhost:8000/transcribe", formData);
+      const response = await axios.post(`${apiBaseUrl}/transcribe`, formData);
       setResult(response.data);
     } catch (err: any) {
       console.error("Transcription failed", err);
@@ -200,7 +202,7 @@ export default function HomePage() {
     if (!result) return;
     setIsProcessingAction(true);
     try {
-      const response = await axios.post("http://localhost:8000/translate_text", {
+      const response = await axios.post(`${apiBaseUrl}/translate_text`, {
         text: result.text,
         target_language: targetTranslationLanguage
       });
@@ -216,7 +218,7 @@ export default function HomePage() {
     if (!result) return;
     setIsProcessingAction(true);
     try {
-      const response = await axios.post("http://localhost:8000/summarize", {
+      const response = await axios.post(`${apiBaseUrl}/summarize`, {
         text: result.text
       });
       setSummaryText(response.data.summary);
