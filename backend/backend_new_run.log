@@ -1,0 +1,13 @@
+/Users/marcuspereira/.gemini/antigravity/scratch/whisper-transcriber/backend/venv/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.2.0)/charset_normalizer (3.4.6) doesn't match a supported version!
+  warnings.warn(
+INFO:     Started server process [22580]
+INFO:     Waiting for application startup.
+2026-04-09 17:27:48,435 INFO job_requeued
+2026-04-09 17:27:48,436 INFO service_started
+INFO:     Application startup complete.
+ERROR:    [Errno 48] error while attempting to bind on address ('0.0.0.0', 8000): [errno 48] address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+Loading Faster-Whisper model base on cpu (int8)...
+HF_TOKEN not found. Speaker diarization will be disabled.
+Transcribing temp_uploads/f523c6f7-0328-4421-af74-6da9b98e2f9c.m4a with Faster-Whisper (base)...

@@ -1,11 +1,15 @@
-import whisper
+from faster_whisper import WhisperModel
 import torch
 from pyannote.audio import Pipeline
 import os
 import subprocess
 import yt_dlp
 from deep_translator import GoogleTranslator
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Transcriber:
@@ -15,9 +19,16 @@ class Transcriber:
         if cls._instance is None:
             cls._instance = super(Transcriber, cls).__new__(cls)
             cls._instance.device = "cuda" if torch.cuda.is_available() else "cpu"
+            # No Mac, "int8" é excelente para CPU. Em CUDA, "float16" é melhor.
+            cls._instance.compute_type = "float16" if cls._instance.device == "cuda" else "int8"
             cls._instance.model_name = "base"
-            print(f"Loading Whisper model {cls._instance.model_name} on {cls._instance.device}...")
-            cls._instance.model = whisper.load_model(cls._instance.model_name, device=cls._instance.device)
+            
+            print(f"Loading Faster-Whisper model {cls._instance.model_name} on {cls._instance.device} ({cls._instance.compute_type})...")
+            cls._instance.model = WhisperModel(
+                cls._instance.model_name, 
+                device=cls._instance.device, 
+                compute_type=cls._instance.compute_type
+            )
 
             cls._instance.hf_token = os.getenv("HF_TOKEN")
             cls._instance.diarization_pipeline = None
@@ -84,10 +95,11 @@ class Transcriber:
         mode: str = "rapido",
         language: str = "pt",
     ) -> Dict[str, Any]:
-        target_model = "tiny" if mode == "rapido" else ("large" if mode == "preciso" else "base")
+        target_model = "tiny" if mode == "rapido" else ("medium" if mode == "preciso" else "base")
+        
         if self.model_name != target_model:
-            print(f"Switching Whisper model from {self.model_name} to {target_model}...")
-            self.model = whisper.load_model(target_model, device=self.device)
+            print(f"Switching Faster-Whisper model from {self.model_name} to {target_model}...")
+            self.model = WhisperModel(target_model, device=self.device, compute_type=self.compute_type)
             self.model_name = target_model
 
         task = "translate" if (translate and language.startswith("en")) else "transcribe"
@@ -101,20 +113,35 @@ class Transcriber:
                 audio_path = restored
 
         try:
-            print(f"Transcribing {audio_path} with model {self.model_name}...")
-            result = self.model.transcribe(audio_path, fp16=(self.device == "cuda"), task=task)
-
-            final_text = result["text"]
-            detected_language = result["language"]
-            base_segments = [
-                {
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 0),
+            print(f"Transcribing {audio_path} with Faster-Whisper ({self.model_name})...")
+            start_t = time.time()
+            
+            # faster-whisper transcribe returns (segments_generator, info)
+            segments_gen, info = self.model.transcribe(
+                audio_path, 
+                beam_size=5, 
+                language=language if language != "auto" else None,
+                task=task
+            )
+            
+            base_segments = []
+            full_text_list = []
+            
+            for seg in segments_gen:
+                base_segments.append({
+                    "start": seg.start,
+                    "end": seg.end,
                     "speaker": None,
-                    "text": seg.get("text", "").strip(),
-                }
-                for seg in result.get("segments", [])
-            ]
+                    "text": seg.text.strip(),
+                })
+                full_text_list.append(seg.text.strip())
+            
+            end_t = time.time()
+            final_text = " ".join(full_text_list).strip()
+            detected_language = info.language
+            
+            print(f"Transcription finished in {end_t - start_t:.2f}s using Faster-Whisper {self.model_name}")
+            logger.info(f"TRANSCRIPTION_FINISHED: {audio_path}")
 
             if translate and not language.startswith("en"):
                 print(f"Translating text to {language}...")
@@ -128,6 +155,7 @@ class Transcriber:
                     print(f"Translation failed: {exc}")
 
             if diarize and self.diarization_pipeline:
+                print("Running speaker diarization...")
                 diarization = self.diarization_pipeline(audio_path)
                 diarized_segments = []
 
@@ -169,3 +197,4 @@ class Transcriber:
 
 
 transcriber_service = Transcriber()
+

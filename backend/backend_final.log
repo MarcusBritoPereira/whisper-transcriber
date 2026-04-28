@@ -1,0 +1,14 @@
+/Users/marcuspereira/.gemini/antigravity/scratch/whisper-transcriber/backend/venv/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.2.0)/charset_normalizer (3.4.6) doesn't match a supported version!
+  warnings.warn(
+INFO:     Started server process [14128]
+INFO:     Waiting for application startup.
+2026-03-20 19:32:50,209 INFO job_requeued
+2026-03-20 19:32:50,209 INFO job_requeued
+2026-03-20 19:32:50,209 INFO job_requeued
+2026-03-20 19:32:50,209 INFO service_started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [14128]

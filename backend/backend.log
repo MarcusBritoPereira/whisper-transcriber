@@ -1,0 +1,14 @@
+INFO:     Will watch for changes in these directories: ['/Users/marcuspereira/.gemini/antigravity/scratch/whisper-transcriber/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
+INFO:     Started reloader process [24547] using StatReload
+/Users/marcuspereira/.gemini/antigravity/scratch/whisper-transcriber/backend/venv/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.2.0)/charset_normalizer (3.4.6) doesn't match a supported version!
+  warnings.warn(
+INFO:     Started server process [24549]
+INFO:     Waiting for application startup.
+2026-04-28 00:43:11,110 INFO WORKER_THREAD_READY
+2026-04-28 00:43:11,110 INFO service_started
+INFO:     Application startup complete.
+Loading Faster-Whisper model base on cpu (int8)...
+HF_TOKEN not found. Speaker diarization will be disabled.
+INFO:     127.0.0.1:60483 - "HEAD /healthz HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:60488 - "GET /healthz HTTP/1.1" 200 OK

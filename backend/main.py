@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, JSONResponse
 import shutil
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import uuid
 import json
 import time
@@ -196,6 +200,7 @@ def process_job(job_id: str) -> None:
     update_job(job_id, "processing")
 
     try:
+        logger.info(f"JOB_STARTED: {job_id}")
         result = transcriber_service.transcribe(
             row["input_path"],
             diarize=req.get("diarize", False),
@@ -205,18 +210,23 @@ def process_job(job_id: str) -> None:
             language=req.get("language", DEFAULT_LANGUAGE),
         )
         update_job(job_id, "completed", result=result)
+        logger.info(f"JOB_COMPLETED: {job_id}")
     except Exception as exc:
-        logger.exception("Job failed", extra={"job_id": job_id})
+        logger.exception(f"JOB_FAILED: {job_id}", extra={"job_id": job_id})
         update_job(job_id, "failed", error=str(exc))
-    finally:
-        remove_local_file(row["input_path"])
+    # Note: We no longer delete the local file here to allow user downloads.
+    # remove_local_file(row["input_path"])
 
 
 def worker() -> None:
+    logger.info("WORKER_THREAD_READY")
     while True:
         job_id = _job_queue.get()
         try:
+            logger.info(f"WORKER_PICKED_JOB: {job_id}")
             process_job(job_id)
+        except Exception as e:
+            logger.error(f"WORKER_CRITICAL_ERROR: {e}")
         finally:
             _job_queue.task_done()
 
@@ -224,9 +234,19 @@ def worker() -> None:
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    
+    # Re-queue unfinished jobs
+    conn = db_conn()
+    unfinished = conn.execute("SELECT id FROM jobs WHERE status IN ('queued', 'processing')").fetchall()
+    conn.close()
+    
+    for row in unfinished:
+        _job_queue.put(row["id"])
+        logger.info(f"JOB_REQUEUED (status logic): {row['id']}")
+        
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    logger.info("service_started", extra={"app": APP_TITLE})
+    logger.info("service_started", extra={"app": APP_TITLE, "requeued_count": len(unfinished)})
 
 
 @app.get("/healthz")
@@ -387,6 +407,22 @@ def job_result(
     if format == "vtt":
         return PlainTextResponse(to_vtt(segments), media_type="text/vtt")
     raise HTTPException(status_code=400, detail="Unsupported format")
+
+
+@app.get("/jobs/{job_id}/audio")
+def download_job_audio(job_id: str, x_api_key: Optional[str] = Header(None)):
+    validate_api_key(x_api_key)
+    row = get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    path = row["input_path"]
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Audio file not found or already deleted")
+    
+    from fastapi.responses import FileResponse
+    filename = os.path.basename(path)
+    return FileResponse(path, filename=f"audio_{job_id}{os.path.splitext(filename)[1]}")
 
 
 @app.post("/translate_text")

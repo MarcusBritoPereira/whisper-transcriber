@@ -68,6 +68,9 @@ export default function HomePage() {
   const [result, setResult] = useState<TranscriptionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<string | null>(null);
+
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showTimestamps, setShowTimestamps] = useState(true);
 
@@ -168,11 +171,40 @@ export default function HomePage() {
     }
   };
 
+  const pollJobStatus = async (id: string) => {
+    try {
+      const response = await axios.get(`${apiBaseUrl}/jobs/${id}`);
+      const { status, error: jobError } = response.data;
+      setJobStatus(status);
+
+      if (status === "completed") {
+        const resultResponse = await axios.get(`${apiBaseUrl}/jobs/${id}/result?format=json`);
+        setResult(resultResponse.data);
+        setIsTranscribing(false);
+        // setJobId(null); // Manter o jobId para permitir download do áudio
+        setJobStatus(null);
+      } else if (status === "failed") {
+        setError(jobError || "Erro no processamento do job.");
+        setIsTranscribing(false);
+        setJobId(null);
+        setJobStatus(null);
+      } else {
+        // Continue polling
+        setTimeout(() => pollJobStatus(id), 3000);
+      }
+    } catch (err: any) {
+      console.error("Polling failed", err);
+      setError("Falha ao verificar status da transcrição.");
+      setIsTranscribing(false);
+    }
+  };
+
   const startTranscription = async () => {
     if ((tab === "local" && !file) || (tab === "online" && !url)) return;
     setIsTranscribing(true);
     setError(null);
     setResult(null);
+    setJobStatus("queued");
     
     const formData = new FormData();
     if (tab === "local" && file) {
@@ -188,12 +220,14 @@ export default function HomePage() {
     formData.append("mode", transcribeMode);
 
     try {
-      const response = await axios.post(`${apiBaseUrl}/transcribe`, formData);
-      setResult(response.data);
+      // Usando o endpoint de jobs (assíncrono)
+      const response = await axios.post(`${apiBaseUrl}/jobs/transcribe`, formData);
+      const { job_id } = response.data;
+      setJobId(job_id);
+      pollJobStatus(job_id);
     } catch (err: any) {
-      console.error("Transcription failed", err);
-      setError(err.response?.data?.detail || "Erro inesperado na transcrição.");
-    } finally {
+      console.error("Transcription start failed", err);
+      setError(err.response?.data?.detail || "Erro ao iniciar transcrição.");
       setIsTranscribing(false);
     }
   };
@@ -264,8 +298,16 @@ export default function HomePage() {
       a.download = file.name;
       a.click();
       URL.revokeObjectURL(blobUrl);
+    } else if (jobId || (result as any)?.job_id) {
+       // Download do áudio processado no backend
+       const id = jobId || (result as any)?.job_id;
+       const url = `${apiBaseUrl}/jobs/${id}/audio`;
+       const a = document.createElement("a");
+       a.href = url;
+       a.download = `audio_${id}.mp3`;
+       a.click();
     } else {
-      alert("Download do arquivo original de URL indisponível no momento.");
+      alert("Erro: ID do trabalho não encontrado para download.");
     }
     setIsMenuOpen(false);
   };
@@ -310,7 +352,7 @@ export default function HomePage() {
                    </div>
                  </div>
                  <div className="px-3 py-1.5 flex items-center gap-1.5 bg-[#F8FAFF] text-indigo-600 rounded-full border border-indigo-100 text-[12px] font-[700]">
-                   <Loader2 className="w-3.5 h-3.5 animate-spin"/> Na fila
+                   <Loader2 className="w-3.5 h-3.5 animate-spin"/> {jobStatus === "processing" ? "Processando..." : "Na fila"}
                  </div>
               </div>
             </div>
@@ -330,7 +372,7 @@ export default function HomePage() {
                  </div>
                </div>
                <h3 className="text-[16px] font-bold text-gray-900 mb-2">Estamos processando sua transcrição...</h3>
-               <p className="text-[13px] font-medium text-gray-500">Na fila</p>
+               <p className="text-[13px] font-medium text-gray-500">{jobStatus === "processing" ? "Processando..." : "Na fila"}</p>
             </div>
           </div>
         </div>
@@ -764,7 +806,21 @@ export default function HomePage() {
                   />
                   <div className="flex justify-end">
                     <button 
-                      onClick={() => { setResult({...result, text: editedText, segments: [{text: editedText, start: 0, end: result.segments.length > 0 ? result.segments[result.segments.length-1]!.end : 0, speaker: result.segments.length > 0 ? result.segments[result.segments.length-1]?.speaker : ""}]}); setActiveResultTab("transcricao"); }}
+                      onClick={() => { 
+                        if (result) {
+                          setResult({
+                            ...result, 
+                            text: editedText, 
+                            segments: [{
+                              text: editedText, 
+                              start: 0, 
+                              end: result.segments.length > 0 ? (result.segments[result.segments.length-1]?.end ?? 0) : 0, 
+                              speaker: result.segments.length > 0 ? (result.segments[result.segments.length-1]?.speaker ?? "") : ""
+                            }]
+                          }); 
+                          setActiveResultTab("transcricao"); 
+                        }
+                      }}
                       className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-[13px] font-semibold hover:bg-indigo-700 transition"
                     >
                       Salvar Edições
