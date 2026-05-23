@@ -8,8 +8,9 @@ Sistema de transcrição com FastAPI + Whisper + frontend Next.js.
 - Persistência de jobs em SQLite (`transcriptions.db`).
 - Exportação de resultado em `json`, `txt`, `srt`, `vtt`.
 - Health checks (`/healthz`, `/readyz`).
-- Autenticação por API Key (`X-API-Key`) opcional via variável de ambiente.
-- Rate limiting por IP em memória.
+- Autenticação por API Key (`X-API-Key`) obrigatória.
+- Isolamento multi-tenant por chave de API nos endpoints de jobs.
+- Rate limiting por tenant+IP em memória.
 - CORS configurável por variável de ambiente.
 - Whitelist de domínios para ingestão por URL.
 
@@ -25,10 +26,11 @@ uvicorn main:app --reload --port 8000
 
 ### Variáveis de ambiente
 
-- `API_KEYS`: chaves separadas por vírgula para exigir autenticação.
+- `API_KEYS`: chaves separadas por vírgula (obrigatório).
+- `API_KEY_TENANTS`: mapeamento `api_key:tenant_id` separado por vírgula (opcional; fallback usa sufixo da chave).
 - `ALLOWED_ORIGINS`: origins separadas por vírgula.
 - `ALLOWED_DOWNLOAD_DOMAINS`: domínios permitidos para ingestão via URL.
-- `RATE_LIMIT_PER_MIN`: limite por minuto por IP.
+- `RATE_LIMIT_PER_MIN`: limite por minuto por `tenant+IP`.
 - `MAX_FILE_MB`: limite de upload.
 - `UPLOAD_DIR`, `RESULTS_DIR`, `DB_PATH`.
 - `HF_TOKEN`: habilita diarização com pyannote.
@@ -50,4 +52,3 @@ Variável:
 1. `POST /jobs/transcribe`
 2. `GET /jobs/{job_id}` até status `completed`
 3. `GET /jobs/{job_id}/result?format=srt`
-
