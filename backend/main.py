@@ -367,6 +367,28 @@ async def transcribe_audio_job(
     return {"job_id": job_id, "status": "queued"}
 
 
+@app.get("/jobs")
+def list_all_jobs(x_api_key: Optional[str] = Header(None)):
+    validate_api_key(x_api_key)
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT id, status, created_at, updated_at, input_path, error FROM jobs ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    
+    return [
+        {
+            "job_id": r["id"],
+            "status": r["status"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+            "filename": os.path.basename(r["input_path"]) if r["input_path"] else "Online URL",
+            "error": r["error"]
+        }
+        for r in rows
+    ]
+
+
 @app.get("/jobs/{job_id}")
 def job_status(job_id: str, x_api_key: Optional[str] = Header(None)):
     validate_api_key(x_api_key)

@@ -92,6 +92,9 @@ export default function HomePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
+  const [viewMode, setViewMode] = useState<"transcribe" | "history">("transcribe");
+  const [historyJobs, setHistoryJobs] = useState<any[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -100,10 +103,60 @@ export default function HomePage() {
       const url = URL.createObjectURL(file);
       setAudioUrl(url);
       return () => URL.revokeObjectURL(url);
-    } else {
+    } else if (viewMode !== "history" && !jobId) {
       setAudioUrl(null);
     }
-  }, [file]);
+  }, [file, viewMode, jobId]);
+
+  const loadHistory = async () => {
+    setIsLoadingHistory(true);
+    try {
+      const response = await axios.get(`${apiBaseUrl}/jobs`);
+      setHistoryJobs(response.data);
+    } catch (err) {
+      console.error("Failed to load history", err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const handleViewJob = async (job: any) => {
+    setIsTranscribing(true);
+    setError(null);
+    setResult(null);
+    setJobId(job.job_id);
+    setJobStatus(null);
+    setAudioUrl(`${apiBaseUrl}/jobs/${job.job_id}/audio`);
+    
+    try {
+      const resultResponse = await axios.get(`${apiBaseUrl}/jobs/${job.job_id}/result?format=json`);
+      setResult(resultResponse.data);
+      setIsTranscribing(false);
+      setViewMode("transcribe");
+    } catch (err: any) {
+      console.error("Failed to load job details", err);
+      setError("Erro ao carregar detalhes da transcrição.");
+      setIsTranscribing(false);
+    }
+  };
+
+  React.useEffect(() => {
+    let interval: any;
+    if (viewMode === "history") {
+      const hasPending = historyJobs.some(j => j.status === "queued" || j.status === "processing");
+      if (hasPending) {
+        interval = setInterval(async () => {
+          try {
+            const response = await axios.get(`${apiBaseUrl}/jobs`);
+            setHistoryJobs(response.data);
+          } catch (e) {
+            console.error(e);
+          }
+        }, 5000);
+      }
+    }
+    return () => clearInterval(interval);
+  }, [viewMode, historyJobs, apiBaseUrl]);
 
   const handleTimeUpdate = () => {
     if (audioRef.current) {
@@ -317,7 +370,34 @@ export default function HomePage() {
       {/* Background soft glow */}
       <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/3 w-[800px] h-[500px] bg-indigo-100/50 rounded-full blur-[100px] pointer-events-none" />
 
-      {isTranscribing ? (
+      {/* Top Navigation / Tab menu */}
+      <div className="flex bg-white/80 backdrop-blur-md p-1 border border-gray-100 rounded-full mb-10 z-10 shadow-[0_4px_20px_rgba(0,0,0,0.02)]">
+        <button
+          onClick={() => { setViewMode("transcribe"); setResult(null); }}
+          className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
+            viewMode === "transcribe" 
+              ? "bg-indigo-600 text-white shadow-sm" 
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Mic className="w-3.5 h-3.5" />
+          Transcrever
+        </button>
+        <button
+          onClick={() => { setViewMode("history"); loadHistory(); }}
+          className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
+            viewMode === "history" 
+              ? "bg-indigo-600 text-white shadow-sm" 
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          Histórico
+        </button>
+      </div>
+
+      {viewMode === "transcribe" && (
+        isTranscribing ? (
         <div className="w-full max-w-[800px] mt-2 z-10 flex flex-col items-center">
           <div className="w-full flex items-center justify-between mb-4 px-2">
             <button onClick={() => setIsTranscribing(false)} className="flex items-center gap-2 text-indigo-500 font-[600] text-[13px] hover:text-indigo-600 transition-colors">
@@ -668,7 +748,113 @@ export default function HomePage() {
         </p>
       </div>
       </>
-      ) : null}
+        ) : null
+      )}
+
+      {/* History view */}
+      {viewMode === "history" && !result && (
+        <div className="w-full max-w-[800px] z-10 flex flex-col items-center">
+          <div className="text-center mb-10 w-full px-4">
+            <h1 className="text-[28px] sm:text-[32px] font-bold text-gray-900 mb-3 tracking-tight">
+              Histórico de Transcrições
+            </h1>
+            <p className="text-[15px] text-gray-500 font-medium">
+              Consulte e acesse todas as suas gravações e transcrições anteriores.
+            </p>
+          </div>
+
+          <div className="w-full bg-white rounded-[24px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 p-6 md:p-8">
+            {isLoadingHistory ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-4">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                <p className="text-sm font-medium text-gray-500">Carregando histórico...</p>
+              </div>
+            ) : historyJobs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="w-16 h-16 bg-gray-50 text-gray-400 rounded-full flex items-center justify-center mb-4 border border-gray-100">
+                  <Clock className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-bold text-gray-900 mb-1">Nenhuma transcrição encontrada</h3>
+                <p className="text-sm text-gray-500 max-w-xs">Você ainda não enviou nenhum áudio ou vídeo para transcrição.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {historyJobs.map((job) => {
+                  const date = new Date(job.created_at).toLocaleString('pt-BR');
+                  const isCompleted = job.status === "completed";
+                  const isFailed = job.status === "failed";
+                  const isProcessing = job.status === "processing";
+                  const isQueued = job.status === "queued";
+
+                  return (
+                    <div key={job.job_id} className="p-4 border border-gray-100 rounded-2xl hover:border-indigo-100 hover:bg-[#FDFEFF]/50 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <div className={`p-2.5 rounded-xl shrink-0 ${
+                          isCompleted ? 'bg-green-50 text-green-600' :
+                          isFailed ? 'bg-red-50 text-red-600' :
+                          'bg-indigo-50 text-indigo-600'
+                        }`}>
+                          <FileAudio className="w-5 h-5" />
+                        </div>
+                        <div className="text-left">
+                          <h4 className="text-sm font-bold text-gray-900 max-w-[280px] sm:max-w-[400px] truncate" title={job.filename}>
+                            {job.filename || "Gravação de Áudio"}
+                          </h4>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-400 font-medium">
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3.5 h-3.5" />
+                              {date}
+                            </span>
+                            <span className="truncate max-w-[150px]" title={job.job_id}>ID: {job.job_id.substring(0, 8)}...</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                          isCompleted ? 'bg-green-50 text-green-600 border border-green-100' :
+                          isFailed ? 'bg-red-50 text-red-600 border border-red-100' :
+                          isProcessing ? 'bg-blue-50 text-blue-600 border border-blue-100 animate-pulse' :
+                          'bg-yellow-50 text-yellow-600 border border-yellow-100'
+                        }`}>
+                          {isCompleted ? 'Concluído' :
+                           isFailed ? 'Falhou' :
+                           isProcessing ? 'Processando' : 'Na Fila'}
+                        </span>
+
+                        {isCompleted && (
+                          <button
+                            onClick={() => handleViewJob(job)}
+                            className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold text-xs rounded-xl hover:bg-indigo-100 transition-colors"
+                          >
+                            Visualizar
+                          </button>
+                        )}
+
+                        {isFailed && (
+                          <button
+                            onClick={() => alert(`Erro: ${job.error || "Erro desconhecido"}`)}
+                            className="px-4 py-2 bg-red-50 text-red-600 font-bold text-xs rounded-xl hover:bg-red-100 transition-colors"
+                          >
+                            Ver Erro
+                          </button>
+                        )}
+
+                        {(isProcessing || isQueued) && (
+                          <span className="text-xs text-gray-400 font-semibold px-2 flex items-center gap-1.5">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Aguarde...
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Result UI (if transcription completed) */}
       {result && !isTranscribing && (
