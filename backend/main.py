@@ -28,8 +28,26 @@ MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "200"))
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "pt")
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 API_KEYS = {k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()}
+API_KEY_TENANTS_RAW = os.getenv("API_KEY_TENANTS", "")
 ALLOWED_DOWNLOAD_DOMAINS = {d.strip() for d in os.getenv("ALLOWED_DOWNLOAD_DOMAINS", "youtube.com,youtu.be,vimeo.com,tiktok.com").split(",") if d.strip()}
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "20"))
+
+
+def parse_api_key_tenants(raw: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        key, tenant = item.split(":", 1)
+        key = key.strip()
+        tenant = tenant.strip()
+        if key and tenant:
+            mapping[key] = tenant
+    return mapping
+
+
+API_KEY_TENANTS = parse_api_key_tenants(API_KEY_TENANTS_RAW)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -91,20 +109,29 @@ def init_db() -> None:
                 input_path TEXT,
                 request_json TEXT,
                 result_json TEXT,
-                error TEXT
+                error TEXT,
+                tenant_id TEXT
             )
             """
         )
+    try:
+        conn.execute("SELECT tenant_id FROM jobs LIMIT 1")
+    except sqlite3.OperationalError:
+        with conn:
+            conn.execute("ALTER TABLE jobs ADD COLUMN tenant_id TEXT")
+    with conn:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_tenant_created_at ON jobs(tenant_id, created_at DESC)")
+        conn.execute("UPDATE jobs SET tenant_id='legacy' WHERE tenant_id IS NULL OR tenant_id=''")
     conn.close()
 
 
-def insert_job(job_id: str, input_path: str, request_payload: dict) -> None:
+def insert_job(job_id: str, input_path: str, request_payload: dict, tenant_id: str) -> None:
     now = utc_now_iso()
     conn = db_conn()
     with conn:
         conn.execute(
-            "INSERT INTO jobs(id, status, created_at, updated_at, input_path, request_json) VALUES(?,?,?,?,?,?)",
-            (job_id, "queued", now, now, input_path, json.dumps(request_payload, ensure_ascii=False)),
+            "INSERT INTO jobs(id, status, created_at, updated_at, input_path, request_json, tenant_id) VALUES(?,?,?,?,?,?,?)",
+            (job_id, "queued", now, now, input_path, json.dumps(request_payload, ensure_ascii=False), tenant_id),
         )
     conn.close()
 
@@ -119,11 +146,30 @@ def update_job(job_id: str, status: str, result: Optional[dict] = None, error: O
     conn.close()
 
 
-def get_job(job_id: str) -> Optional[sqlite3.Row]:
+def get_job(job_id: str, tenant_id: str) -> Optional[sqlite3.Row]:
+    conn = db_conn()
+    row = conn.execute("SELECT * FROM jobs WHERE id=? AND tenant_id=?", (job_id, tenant_id)).fetchone()
+    conn.close()
+    return row
+
+
+def get_job_by_id(job_id: str) -> Optional[sqlite3.Row]:
     conn = db_conn()
     row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     conn.close()
     return row
+
+
+def delete_job_for_tenant(job_id: str, tenant_id: str) -> Optional[str]:
+    conn = db_conn()
+    row = conn.execute("SELECT input_path FROM jobs WHERE id=? AND tenant_id=?", (job_id, tenant_id)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    with conn:
+        conn.execute("DELETE FROM jobs WHERE id=? AND tenant_id=?", (job_id, tenant_id))
+    conn.close()
+    return row["input_path"]
 
 
 def remove_local_file(path: Optional[str]) -> None:
@@ -131,11 +177,14 @@ def remove_local_file(path: Optional[str]) -> None:
         os.remove(path)
 
 
-def validate_api_key(x_api_key: Optional[str]) -> None:
+def validate_api_key(x_api_key: Optional[str]) -> str:
     if not API_KEYS:
-        return
+        raise HTTPException(status_code=503, detail="Server misconfigured: API_KEYS is required")
     if not x_api_key or x_api_key not in API_KEYS:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    if API_KEY_TENANTS and x_api_key not in API_KEY_TENANTS:
+        raise HTTPException(status_code=401, detail="API key tenant mapping missing")
+    return API_KEY_TENANTS.get(x_api_key, x_api_key[-8:])
 
 
 def check_rate_limit(client_id: str) -> None:
@@ -192,7 +241,7 @@ def to_vtt(segments: list[dict]) -> str:
 
 
 def process_job(job_id: str) -> None:
-    row = get_job(job_id)
+    row = get_job_by_id(job_id)
     if not row:
         return
 
@@ -274,8 +323,8 @@ async def transcribe_audio_sync(
     mode: str = Form("rapido"),
     x_api_key: Optional[str] = Header(None),
 ):
-    validate_api_key(x_api_key)
-    check_rate_limit(request.client.host if request.client else "unknown")
+    tenant_id = validate_api_key(x_api_key)
+    check_rate_limit(f"{tenant_id}:{request.client.host if request.client else 'unknown'}")
 
     if not file and not url:
         raise HTTPException(status_code=400, detail="Either file or url must be provided")
@@ -333,8 +382,8 @@ async def transcribe_audio_job(
     mode: str = Form("rapido"),
     x_api_key: Optional[str] = Header(None),
 ):
-    validate_api_key(x_api_key)
-    check_rate_limit(request.client.host if request.client else "unknown")
+    tenant_id = validate_api_key(x_api_key)
+    check_rate_limit(f"{tenant_id}:{request.client.host if request.client else 'unknown'}")
 
     if not file and not url:
         raise HTTPException(status_code=400, detail="Either file or url must be provided")
@@ -362,18 +411,19 @@ async def transcribe_audio_job(
         "mode": mode,
     }
 
-    insert_job(job_id, input_path, payload)
+    payload["tenant_id"] = tenant_id
+    insert_job(job_id, input_path, payload, tenant_id)
     _job_queue.put(job_id)
     return {"job_id": job_id, "status": "queued"}
 
 
 @app.get("/jobs")
 def list_all_jobs(x_api_key: Optional[str] = Header(None)):
-    validate_api_key(x_api_key)
+    tenant_id = validate_api_key(x_api_key)
     conn = db_conn()
     rows = conn.execute(
-        "SELECT id, status, created_at, updated_at, input_path, error FROM jobs ORDER BY created_at DESC"
-    ).fetchall()
+        "SELECT id, status, created_at, updated_at, input_path, error FROM jobs WHERE tenant_id=? ORDER BY created_at DESC"
+    , (tenant_id,)).fetchall()
     conn.close()
     
     return [
@@ -391,8 +441,8 @@ def list_all_jobs(x_api_key: Optional[str] = Header(None)):
 
 @app.get("/jobs/{job_id}")
 def job_status(job_id: str, x_api_key: Optional[str] = Header(None)):
-    validate_api_key(x_api_key)
-    row = get_job(job_id)
+    tenant_id = validate_api_key(x_api_key)
+    row = get_job(job_id, tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     return {
@@ -410,8 +460,8 @@ def job_result(
     format: str = Query("json", pattern="^(json|txt|srt|vtt)$"),
     x_api_key: Optional[str] = Header(None),
 ):
-    validate_api_key(x_api_key)
-    row = get_job(job_id)
+    tenant_id = validate_api_key(x_api_key)
+    row = get_job(job_id, tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     if row["status"] != "completed":
@@ -433,8 +483,8 @@ def job_result(
 
 @app.get("/jobs/{job_id}/audio")
 def download_job_audio(job_id: str, x_api_key: Optional[str] = Header(None)):
-    validate_api_key(x_api_key)
-    row = get_job(job_id)
+    tenant_id = validate_api_key(x_api_key)
+    row = get_job(job_id, tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -445,6 +495,16 @@ def download_job_audio(job_id: str, x_api_key: Optional[str] = Header(None)):
     from fastapi.responses import FileResponse
     filename = os.path.basename(path)
     return FileResponse(path, filename=f"audio_{job_id}{os.path.splitext(filename)[1]}")
+
+
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: str, x_api_key: Optional[str] = Header(None)):
+    tenant_id = validate_api_key(x_api_key)
+    input_path = delete_job_for_tenant(job_id, tenant_id)
+    if input_path is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    remove_local_file(input_path)
+    return {"job_id": job_id, "deleted": True}
 
 
 @app.post("/translate_text")
