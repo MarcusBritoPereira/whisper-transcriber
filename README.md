@@ -32,6 +32,7 @@ uvicorn main:app --reload --port 8000
 - `ALLOWED_ORIGINS`: origins separadas por vírgula.
 - `ALLOWED_DOWNLOAD_DOMAINS`: domínios permitidos para ingestão via URL.
 - `RATE_LIMIT_PER_MIN`: limite por minuto por `tenant+IP`.
+- `JOB_RETENTION_DAYS`: retenção de jobs/áudios locais (purga automática no startup, default `7`).
 - `MAX_FILE_MB`: limite de upload.
 - `UPLOAD_DIR`, `RESULTS_DIR`, `DB_PATH`.
 - `HF_TOKEN`: habilita diarização com pyannote.
