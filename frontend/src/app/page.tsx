@@ -37,6 +37,9 @@ import {
 } from "lucide-react";
 import axios from "axios";
 
+// Configure default X-API-Key header for Axios requests
+axios.defaults.headers.common["X-API-Key"] = "sua_chave_cliente";
+
 interface Segment {
   speaker: string;
   start: number;
@@ -92,11 +95,114 @@ export default function HomePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
-  const [viewMode, setViewMode] = useState<"transcribe" | "history">("transcribe");
+  const [viewMode, setViewMode] = useState<"transcribe" | "history" | "plan">("transcribe");
   const [historyJobs, setHistoryJobs] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
+  // Payment & Subscription States
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string>("inactive");
+  const [subscriptionData, setSubscriptionData] = useState<any>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [checkoutStep, setCheckoutStep] = useState<"plans" | "form" | "pix" | "boleto" | "success">("plans");
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelStep, setCancelStep] = useState<"confirm" | "final">("confirm");
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [checkoutForm, setCheckoutForm] = useState({
+    first_name: "",
+    last_name: "",
+    email: "",
+    phone: "",
+    document_number: "",
+    payment_method: "credit_card", // credit_card, pix, boleto
+    postcode: "",
+    street: "",
+    number: "",
+    complement: "",
+    district: "",
+    city: "",
+    state: "",
+    card_number: "",
+    card_holder_name: "",
+    card_holder_document: "",
+    card_cvv: "",
+    card_exp_month: "",
+    card_exp_year: "",
+    installments: 1
+  });
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutResult, setCheckoutResult] = useState<any>(null);
+  const [pixTimer, setPixTimer] = useState<number>(600); // 10 minutes (600s) for Pix
+
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+  // Subscription Status check and payment redirection parameters
+  React.useEffect(() => {
+    const checkSubscription = async () => {
+      try {
+        const response = await axios.get(`${apiBaseUrl}/api/v1/payments/subscription-status`);
+        setSubscriptionStatus(response.data.status);
+        setSubscriptionData(response.data);
+      } catch (err) {
+        console.error("Failed to check subscription status", err);
+        setSubscriptionStatus("inactive");
+      }
+    };
+    checkSubscription();
+
+    // Check for successful payment return URL parameters
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get("status") === "success") {
+        setCheckoutStep("success");
+        setShowUpgradeModal(true);
+        setSubscriptionStatus("active");
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, [apiBaseUrl]);
+
+  const handleCancelSubscription = async () => {
+    setIsCancelling(true);
+    setCancelError(null);
+    try {
+      await axios.post(`${apiBaseUrl}/api/v1/payments/cancel`, {
+        email: checkoutForm.email || "",
+        name: `${checkoutForm.first_name || ""} ${checkoutForm.last_name || ""}`.trim() || "Usuário",
+        reason: "Cancelado pelo usuário via painel",
+      });
+      setSubscriptionStatus("cancelled");
+      setSubscriptionData((prev: any) => prev ? { ...prev, status: "cancelled" } : prev);
+      setShowCancelModal(false);
+      setCancelStep("confirm");
+    } catch (err: any) {
+      setCancelError(err.response?.data?.detail || "Erro ao cancelar assinatura.");
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  const formatDate = (iso: string | null) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    } catch { return "—"; }
+  };
+
+  // Pix timer effect
+  React.useEffect(() => {
+    let timer: any;
+    if (checkoutStep === "pix" && pixTimer > 0) {
+      timer = setInterval(() => {
+        setPixTimer(prev => prev - 1);
+      }, 1000);
+    } else if (pixTimer === 0) {
+      setCheckoutStep("plans");
+      setPixTimer(600);
+    }
+    return () => clearInterval(timer);
+  }, [checkoutStep, pixTimer]);
 
   React.useEffect(() => {
     if (file) {
@@ -252,8 +358,68 @@ export default function HomePage() {
     }
   };
 
+  const handleCheckoutSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsCheckingOut(true);
+    setCheckoutError(null);
+    try {
+      // Collect IP dynamically from script if present
+      let clientIp = "127.0.0.1";
+      if (window.AppmaxScripts) {
+        // AppmaxJS collects the IP, so we extract it or fallback to a standard client IP
+      }
+      
+      const payload: any = {
+        first_name: checkoutForm.first_name,
+        last_name: checkoutForm.last_name,
+        email: checkoutForm.email,
+        phone: checkoutForm.phone,
+        document_number: checkoutForm.document_number,
+        ip: clientIp,
+        payment_method: checkoutForm.payment_method,
+        postcode: checkoutForm.postcode || null,
+        street: checkoutForm.street || null,
+        number: checkoutForm.number || null,
+        complement: checkoutForm.complement || null,
+        district: checkoutForm.district || null,
+        city: checkoutForm.city || null,
+        state: checkoutForm.state || null
+      };
+
+      if (checkoutForm.payment_method === "credit_card") {
+        // Appmax JS tokenization mock or sandbox simulation:
+        payload.card_token = "mock_cc_token_from_frontend_" + Math.random().toString(36).substring(7);
+        payload.card_holder_name = checkoutForm.card_holder_name || `${checkoutForm.first_name} ${checkoutForm.last_name}`;
+        payload.card_holder_document = checkoutForm.card_holder_document || checkoutForm.document_number;
+        payload.installments = Number(checkoutForm.installments);
+      }
+
+      const response = await axios.post(`${apiBaseUrl}/api/v1/payments/checkout`, payload);
+      setCheckoutResult(response.data);
+      const checkoutUrl = response.data.checkout_url;
+      
+      if (checkoutUrl) {
+        window.location.href = checkoutUrl;
+      } else {
+        throw new Error("Checkout URL não retornada pelo Abacate Pay.");
+      }
+    } catch (err: any) {
+      console.error("Checkout submit error", err);
+      setCheckoutError(err.response?.data?.detail || "Erro ao processar pagamento na Abacate Pay.");
+    } finally {
+      setIsCheckingOut(false);
+    }
+  };
+
   const startTranscription = async () => {
     if ((tab === "local" && !file) || (tab === "online" && !url)) return;
+    
+    // Billing subscription guard check
+    if (subscriptionStatus !== "active") {
+      setShowUpgradeModal(true);
+      return;
+    }
+
     setIsTranscribing(true);
     setError(null);
     setResult(null);
@@ -370,8 +536,28 @@ export default function HomePage() {
       {/* Background soft glow */}
       <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/3 w-[800px] h-[500px] bg-indigo-100/50 rounded-full blur-[100px] pointer-events-none" />
 
+      {/* Premium Upgrade Banner */}
+      {subscriptionStatus !== "active" && (
+        <div className="w-full max-w-4xl bg-gradient-to-r from-amber-500 to-orange-600 text-white px-6 py-3 rounded-2xl flex items-center justify-between gap-4 mb-6 z-10 shadow-sm border border-orange-400/20">
+          <div className="flex items-center gap-3">
+            <Zap className="w-5 h-5 animate-pulse text-amber-200 shrink-0" />
+            <div className="text-left">
+              <p className="text-sm font-bold">Aproveite todo o poder da Inteligência Artificial!</p>
+              <p className="text-xs text-amber-100 font-medium">Assine o plano Premium por apenas R$ 150,00/ano e libere transcrições ilimitadas e speaker diarization.</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }}
+            className="bg-white text-orange-700 hover:bg-amber-50 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm shrink-0"
+          >
+            Fazer Upgrade
+          </button>
+        </div>
+      )}
+
       {/* Top Navigation / Tab menu */}
       <div className="flex bg-white/80 backdrop-blur-md p-1 border border-gray-100 rounded-full mb-10 z-10 shadow-[0_4px_20px_rgba(0,0,0,0.02)]">
+      {viewMode === "transcribe" && (
         <button
           onClick={() => { setViewMode("transcribe"); setResult(null); }}
           className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
@@ -383,6 +569,16 @@ export default function HomePage() {
           <Mic className="w-3.5 h-3.5" />
           Transcrever
         </button>
+      )}
+      {viewMode !== "transcribe" && (
+        <button
+          onClick={() => { setViewMode("transcribe"); setResult(null); }}
+          className="flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 text-gray-500 hover:text-gray-700"
+        >
+          <Mic className="w-3.5 h-3.5" />
+          Transcrever
+        </button>
+      )}
         <button
           onClick={() => { setViewMode("history"); loadHistory(); }}
           className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
@@ -394,6 +590,19 @@ export default function HomePage() {
           <Clock className="w-3.5 h-3.5" />
           Histórico
         </button>
+        {subscriptionStatus === "active" && (
+          <button
+            onClick={() => setViewMode("plan")}
+            className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
+              viewMode === "plan"
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            Meu Plano
+          </button>
+        )}
       </div>
 
       {viewMode === "transcribe" && (
@@ -1175,6 +1384,572 @@ export default function HomePage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* Appmax Premium Checkout Modal */}
+      {showUpgradeModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-md flex items-center justify-center z-50 p-4 transition-all duration-300 animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-white w-full max-w-[540px] rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] border border-gray-100 overflow-hidden flex flex-col max-h-[90vh] transition-transform duration-300 scale-100 animate-[scaleUp_0.3s_ease-out]">
+            
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-indigo-50/50 to-amber-50/35">
+              <div className="flex items-center gap-2">
+                <Zap className="w-5 h-5 text-amber-500 animate-pulse" />
+                <h3 className="text-base font-bold text-gray-900">
+                  {checkoutStep === "plans" && "Escolha seu Plano"}
+                  {checkoutStep === "form" && "Dados de Pagamento"}
+                  {checkoutStep === "pix" && "Pagamento via Pix"}
+                  {checkoutStep === "boleto" && "Pagamento via Boleto"}
+                  {checkoutStep === "success" && "Parabéns! Conta Premium"}
+                </h3>
+              </div>
+              <button 
+                onClick={() => { setShowUpgradeModal(false); setCheckoutStep("plans"); setCheckoutError(null); }}
+                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-full hover:bg-gray-100 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-6 md:p-8">
+              
+              {/* Step: PLANS */}
+              {checkoutStep === "plans" && (
+                <div className="flex flex-col items-center text-center">
+                  <div className="w-16 h-16 bg-amber-100/50 text-amber-500 rounded-full flex items-center justify-center mb-5 border border-amber-200/20">
+                    <Zap className="w-8 h-8 fill-current" />
+                  </div>
+                  <h4 className="text-[20px] font-black text-gray-900 mb-1">Whisper Transcriber Premium</h4>
+                  <p className="text-xs text-gray-500 font-medium mb-6">Acesso ilimitado à inteligência artificial de transcrição mais precisa do mundo.</p>
+                  
+                  {/* Pricing Card */}
+                  <div className="w-full bg-[#FBFDFF] border border-indigo-100/80 rounded-2xl p-6 mb-6 shadow-[0_4px_15px_rgba(99,102,241,0.02)] relative overflow-hidden">
+                    <div className="absolute top-0 right-0 bg-amber-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider">Melhor Valor</div>
+                    <span className="text-[13px] font-bold text-indigo-500 uppercase tracking-wider">Plano Anual</span>
+                    <div className="flex items-baseline justify-center gap-1.5 mt-2 mb-4">
+                      <span className="text-gray-400 text-sm font-semibold">R$</span>
+                      <span className="text-[36px] font-black text-gray-900 tracking-tight">150,00</span>
+                      <span className="text-gray-400 text-xs font-semibold">/ ano</span>
+                    </div>
+                    
+                    <div className="border-t border-gray-100 pt-4 space-y-3.5 text-left text-xs font-medium text-gray-600">
+                      <div className="flex items-center gap-2.5">
+                        <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
+                        <span>Transcrições ilimitadas sem restrição de minutos</span>
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
+                        <span>Reconhecimento de falantes (Speaker Diarization)</span>
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
+                        <span>Tradução simultânea e restauração de áudio</span>
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
+                        <span>Suporte premium e maior velocidade de fila</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={() => setCheckoutStep("form")}
+                    className="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm rounded-xl shadow-md hover:from-amber-600 hover:to-orange-600 transition-all flex items-center justify-center gap-2"
+                  >
+                    Quero Assinar Premium
+                  </button>
+                </div>
+              )}
+
+              {/* Step: FORM & CHECKOUT */}
+              {checkoutStep === "form" && (
+                <form onSubmit={handleCheckoutSubmit} className="space-y-6 text-left">
+                  
+                  {/* Dados Pessoais */}
+                  <div className="space-y-4">
+                    <h5 className="text-[13px] font-bold text-gray-800 border-l-2 border-indigo-500 pl-2">Identificação</h5>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 mb-1.5 uppercase">Nome</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={checkoutForm.first_name}
+                          onChange={(e) => setCheckoutForm({...checkoutForm, first_name: e.target.value})}
+                          placeholder="Marcus"
+                          className="w-full bg-[#F8FAFC] border border-gray-200 rounded-xl px-4 py-3 text-[13px] font-medium outline-none focus:border-indigo-400 focus:bg-white transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 mb-1.5 uppercase">Sobrenome</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={checkoutForm.last_name}
+                          onChange={(e) => setCheckoutForm({...checkoutForm, last_name: e.target.value})}
+                          placeholder="Pereira"
+                          className="w-full bg-[#F8FAFC] border border-gray-200 rounded-xl px-4 py-3 text-[13px] font-medium outline-none focus:border-indigo-400 focus:bg-white transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 mb-1.5 uppercase">CPF / CNPJ</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={checkoutForm.document_number}
+                          onChange={(e) => setCheckoutForm({...checkoutForm, document_number: e.target.value})}
+                          placeholder="Somente números"
+                          className="w-full bg-[#F8FAFC] border border-gray-200 rounded-xl px-4 py-3 text-[13px] font-medium outline-none focus:border-indigo-400 focus:bg-white transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 mb-1.5 uppercase">Celular</label>
+                        <input 
+                          type="tel" 
+                          required
+                          value={checkoutForm.phone}
+                          onChange={(e) => setCheckoutForm({...checkoutForm, phone: e.target.value})}
+                          placeholder="DDD + Número (Max 11)"
+                          className="w-full bg-[#F8FAFC] border border-gray-200 rounded-xl px-4 py-3 text-[13px] font-medium outline-none focus:border-indigo-400 focus:bg-white transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-500 mb-1.5 uppercase">E-mail</label>
+                      <input 
+                        type="email" 
+                        required
+                        value={checkoutForm.email}
+                        onChange={(e) => setCheckoutForm({...checkoutForm, email: e.target.value})}
+                        placeholder="seu.email@exemplo.com"
+                        className="w-full bg-[#F8FAFC] border border-gray-200 rounded-xl px-4 py-3 text-[13px] font-medium outline-none focus:border-indigo-400 focus:bg-white transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Método de Pagamento */}
+                  <div className="space-y-4">
+                    <h5 className="text-[13px] font-bold text-gray-800 border-l-2 border-indigo-500 pl-2">Forma de Pagamento</h5>
+                    
+                    <div className="grid grid-cols-3 gap-3">
+                      {/* Cartão de Crédito */}
+                      <button 
+                        type="button"
+                        onClick={() => setCheckoutForm({...checkoutForm, payment_method: "credit_card"})}
+                        className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-center ${checkoutForm.payment_method === "credit_card" ? "border-indigo-500 bg-indigo-50/20 text-indigo-600 font-bold" : "border-gray-100 hover:bg-gray-50 text-gray-500"}`}
+                      >
+                        <svg className="w-5 h-5 mb-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x={2} y={5} width={20} height={14} rx={2} /><line x1={2} y1={10} x2={22} y2={10} /></svg>
+                        <span className="text-[10px] tracking-wide">Cartão</span>
+                      </button>
+
+                      {/* Pix */}
+                      <button 
+                        type="button"
+                        onClick={() => setCheckoutForm({...checkoutForm, payment_method: "pix"})}
+                        className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-center ${checkoutForm.payment_method === "pix" ? "border-indigo-500 bg-indigo-50/20 text-indigo-600 font-bold" : "border-gray-100 hover:bg-gray-50 text-gray-500"}`}
+                      >
+                        <Zap className="w-5 h-5 mb-1" />
+                        <span className="text-[10px] tracking-wide">Pix</span>
+                      </button>
+
+                      {/* Boleto */}
+                      <button 
+                        type="button"
+                        onClick={() => setCheckoutForm({...checkoutForm, payment_method: "boleto"})}
+                        className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-center ${checkoutForm.payment_method === "boleto" ? "border-indigo-500 bg-indigo-50/20 text-indigo-600 font-bold" : "border-gray-100 hover:bg-gray-50 text-gray-500"}`}
+                      >
+                        <FileText className="w-5 h-5 mb-1" />
+                        <span className="text-[10px] tracking-wide">Boleto</span>
+                      </button>
+                    </div>
+
+                    {/* Credit Card Inputs */}
+                    {checkoutForm.payment_method === "credit_card" && (
+                      <div className="space-y-4 bg-gray-50 p-4 rounded-2xl border border-gray-100/50 mt-3 transition-all">
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Número do Cartão</label>
+                          <input 
+                            type="text" 
+                            required
+                            value={checkoutForm.card_number}
+                            onChange={(e) => setCheckoutForm({...checkoutForm, card_number: e.target.value})}
+                            placeholder="4444 2222 2222 2222"
+                            className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Nome impresso no Cartão</label>
+                          <input 
+                            type="text" 
+                            required
+                            value={checkoutForm.card_holder_name}
+                            onChange={(e) => setCheckoutForm({...checkoutForm, card_holder_name: e.target.value})}
+                            placeholder="MARCUS PEREIRA"
+                            className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium outline-none"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Mês</label>
+                            <input 
+                              type="text" 
+                              required
+                              value={checkoutForm.card_exp_month}
+                              onChange={(e) => setCheckoutForm({...checkoutForm, card_exp_month: e.target.value})}
+                              placeholder="MM"
+                              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium text-center outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Ano</label>
+                            <input 
+                              type="text" 
+                              required
+                              value={checkoutForm.card_exp_year}
+                              onChange={(e) => setCheckoutForm({...checkoutForm, card_exp_year: e.target.value})}
+                              placeholder="AA"
+                              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium text-center outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">CVV</label>
+                            <input 
+                              type="text" 
+                              required
+                              value={checkoutForm.card_cvv}
+                              onChange={(e) => setCheckoutForm({...checkoutForm, card_cvv: e.target.value})}
+                              placeholder="123"
+                              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium text-center outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {checkoutError && (
+                    <div className="p-3 bg-red-50 text-red-600 text-xs font-semibold rounded-xl border border-red-100 text-center">
+                      {checkoutError}
+                    </div>
+                  )}
+
+                  <div className="flex gap-4 pt-4">
+                    <button 
+                      type="button"
+                      onClick={() => setCheckoutStep("plans")}
+                      className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-xs rounded-xl transition-all"
+                    >
+                      Voltar
+                    </button>
+                    <button 
+                      type="submit"
+                      disabled={isCheckingOut}
+                      className="flex-[2] py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+                    >
+                      {isCheckingOut ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Processando...
+                        </>
+                      ) : (
+                        `Pagar R$ 150,00`
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Step: PIX */}
+              {checkoutStep === "pix" && checkoutResult && (
+                <div className="flex flex-col items-center text-center">
+                  <div className="bg-green-50 text-green-500 p-2.5 rounded-full border border-green-200/20 mb-5">
+                    <Check className="w-6 h-6" strokeWidth={3} />
+                  </div>
+                  <h4 className="text-[18px] font-black text-gray-900 mb-1">Pedido Gerado com Sucesso!</h4>
+                  <p className="text-xs text-gray-500 font-medium mb-6">Pague via Pix para ativação imediata da sua conta premium.</p>
+                  
+                  {/* QR Code */}
+                  {checkoutResult.response_data?.pix_image && (
+                    <div className="w-[180px] h-[180px] bg-white border border-gray-100 rounded-2xl p-2.5 shadow-sm mb-5 flex items-center justify-center">
+                      <img 
+                        src={`data:image/png;base64,${checkoutResult.response_data.pix_image}`} 
+                        alt="QR Code Pix Appmax" 
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  )}
+
+                  {/* Timer */}
+                  <div className="flex items-center gap-2 bg-amber-50 text-amber-700 border border-amber-100 rounded-xl px-4 py-2 text-xs font-semibold mb-6">
+                    <Clock className="w-4 h-4 animate-pulse" />
+                    <span>Expira em: {Math.floor(pixTimer / 60)}:{(pixTimer % 60).toString().padStart(2, '0')}</span>
+                  </div>
+
+                  {/* EMV Copia e Cola */}
+                  {checkoutResult.response_data?.pix_code && (
+                    <div className="w-full mb-6">
+                      <label className="block text-[10px] font-bold text-gray-400 text-left uppercase mb-1.5 pl-1">Código Pix Copia e Cola</label>
+                      <div className="flex bg-gray-50 border border-gray-100 rounded-xl p-2.5 items-center justify-between gap-3">
+                        <span className="text-[11px] font-mono text-gray-500 truncate text-left flex-1 select-all">{checkoutResult.response_data.pix_code}</span>
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(checkoutResult.response_data.pix_code);
+                            alert("Código Pix copiado!");
+                          }}
+                          className="bg-white hover:bg-gray-100 text-indigo-600 border border-gray-200 px-3 py-1.5 rounded-lg text-[10px] font-bold shadow-sm shrink-0 transition-colors"
+                        >
+                          Copiar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <button 
+                    onClick={() => { setShowUpgradeModal(false); setCheckoutStep("plans"); }}
+                    className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all"
+                  >
+                    Fechar e Conferir Status
+                  </button>
+                </div>
+              )}
+
+              {/* Step: BOLETO */}
+              {checkoutStep === "boleto" && checkoutResult && (
+                <div className="flex flex-col items-center text-center">
+                  <div className="bg-green-50 text-green-500 p-2.5 rounded-full border border-green-200/20 mb-5">
+                    <Check className="w-6 h-6" strokeWidth={3} />
+                  </div>
+                  <h4 className="text-[18px] font-black text-gray-900 mb-1">Pedido Gerado com Sucesso!</h4>
+                  <p className="text-xs text-gray-500 font-medium mb-6">Realize o pagamento do boleto bancário abaixo.</p>
+                  
+                  {checkoutResult.response_data?.digitable_line && (
+                    <div className="w-full mb-6 text-left bg-gray-50 p-4 border border-gray-100 rounded-2xl">
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Linha Digitável</label>
+                      <p className="text-[12px] font-mono font-semibold text-gray-600 break-all select-all mb-3">{checkoutResult.response_data.digitable_line}</p>
+                      <button 
+                        onClick={() => {
+                          navigator.clipboard.writeText(checkoutResult.response_data.digitable_line);
+                          alert("Linha digitável copiada!");
+                        }}
+                        className="bg-white hover:bg-gray-100 text-indigo-600 border border-gray-200 px-4 py-2 rounded-xl text-[10px] font-bold shadow-sm transition-colors"
+                      >
+                        Copiar Linha Digitável
+                      </button>
+                    </div>
+                  )}
+
+                  {checkoutResult.response_data?.pdf_url && (
+                    <a 
+                      href={checkoutResult.response_data.pdf_url} 
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-xs rounded-xl shadow-md hover:from-amber-600 hover:to-orange-600 transition-all flex items-center justify-center gap-2 mb-6"
+                    >
+                      <Download className="w-4.5 h-4.5" />
+                      Visualizar Boleto PDF
+                    </a>
+                  )}
+
+                  <button 
+                    onClick={() => { setShowUpgradeModal(false); setCheckoutStep("plans"); }}
+                    className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all"
+                  >
+                    Concluir e Voltar
+                  </button>
+                </div>
+              )}
+
+              {/* Step: SUCCESS */}
+              {checkoutStep === "success" && (
+                <div className="flex flex-col items-center text-center py-4">
+                  <div className="w-16 h-16 bg-green-100 text-green-500 rounded-full flex items-center justify-center border border-green-200/20 mb-5 relative">
+                    <Check className="w-8 h-8" strokeWidth={3} />
+                    <span className="absolute -top-1 -right-1 text-lg animate-bounce">🎉</span>
+                  </div>
+                  <h4 className="text-[20px] font-black text-gray-900 mb-1">Upgrade Concluído!</h4>
+                  <p className="text-xs text-gray-500 font-medium mb-6">Sua assinatura Premium anual está ativa e liberada.</p>
+
+                  <div className="bg-indigo-50/20 border border-indigo-100 rounded-2xl p-5 mb-4 w-full text-left space-y-2.5">
+                    <p className="text-xs text-gray-700 font-bold">Resumo da Assinatura:</p>
+                    <div className="flex justify-between text-xs font-semibold text-gray-500">
+                      <span>Plano</span>
+                      <span className="text-indigo-600">Premium Anual</span>
+                    </div>
+                    <div className="flex justify-between text-xs font-semibold text-gray-500">
+                      <span>Valor</span>
+                      <span>R$ 150,00 / ano</span>
+                    </div>
+                    <div className="flex justify-between text-xs font-semibold text-gray-500">
+                      <span>Válido até</span>
+                      <span className="text-gray-800 font-bold">
+                        {subscriptionData?.expires_at ? formatDate(subscriptionData.expires_at) : formatDate(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString())}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-xs font-semibold text-gray-500">
+                      <span>Status</span>
+                      <span className="text-green-500">Ativo</span>
+                    </div>
+                  </div>
+
+                  <div className="w-full bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-6 flex items-center gap-2.5">
+                    <span className="text-base">✉️</span>
+                    <p className="text-xs text-amber-800 font-semibold text-left">
+                      Um e-mail de boas-vindas foi enviado com os detalhes da sua assinatura.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => { setShowUpgradeModal(false); setCheckoutStep("plans"); }}
+                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all"
+                  >
+                    Começar a Transcrever
+                  </button>
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Meu Plano View ── */}
+      {viewMode === "plan" && (
+        <div className="w-full max-w-[540px] z-10 animate-[fadeIn_0.2s_ease-out]">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
+              <Zap className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-black text-gray-900">Meu Plano</h2>
+              <p className="text-xs text-gray-500 font-medium">Gerencie sua assinatura Premium</p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-3xl shadow-[0_8px_30px_rgba(0,0,0,0.04)] p-6 mb-4">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-black text-gray-900">Premium Anual</span>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  subscriptionData?.status === "active" ? "bg-green-100 text-green-700"
+                  : subscriptionData?.status === "cancelled" ? "bg-red-100 text-red-600"
+                  : "bg-gray-100 text-gray-500"
+                }`}>
+                  {subscriptionData?.status === "active" ? "● Ativo" : subscriptionData?.status === "cancelled" ? "Cancelado" : "Inativo"}
+                </span>
+              </div>
+              <span className="text-xs font-bold text-indigo-600">R$ 150,00 / ano</span>
+            </div>
+            <div className="space-y-3 border-t border-gray-100 pt-4">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-500 font-medium">Válido até</span>
+                <span className="text-gray-900 font-bold">{subscriptionData?.expires_at ? formatDate(subscriptionData.expires_at) : "—"}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-500 font-medium">Criado em</span>
+                <span className="text-gray-700 font-semibold">{subscriptionData?.created_at ? formatDate(subscriptionData.created_at) : "—"}</span>
+              </div>
+              {subscriptionData?.last_order_id && (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-500 font-medium">Pedido</span>
+                  <span className="text-gray-500 font-mono text-xs truncate max-w-[180px]">{subscriptionData.last_order_id}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-indigo-50/40 border border-indigo-100 rounded-2xl p-5 mb-4">
+            <p className="text-xs font-bold text-indigo-700 mb-3 uppercase tracking-wider">Incluído no seu plano</p>
+            <div className="space-y-2">
+              {["Transcrições ilimitadas", "Reconhecimento de falantes", "Tradução simultânea", "Restauração de áudio", "Suporte premium"].map(f => (
+                <div key={f} className="flex items-center gap-2 text-xs text-gray-700 font-medium">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                  {f}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {subscriptionData?.status === "active" && (
+            <button
+              onClick={() => { setShowCancelModal(true); setCancelStep("confirm"); setCancelError(null); }}
+              className="w-full py-3 border border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300 font-semibold text-xs rounded-xl transition-all"
+            >
+              Cancelar assinatura
+            </button>
+          )}
+
+          {subscriptionData?.status === "cancelled" && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+              <p className="text-xs text-amber-800 font-semibold mb-3">Sua assinatura foi cancelada. Você ainda tem acesso até a data de expiração.</p>
+              <button onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }} className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all">
+                Reativar Plano
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Cancel Subscription Modal ── */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-white w-full max-w-[420px] rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.18)] border border-gray-100 overflow-hidden">
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-base font-bold text-gray-900">Cancelar assinatura</h3>
+              <button onClick={() => setShowCancelModal(false)} className="text-gray-400 hover:text-gray-600 p-1.5 rounded-full hover:bg-gray-100 transition-colors">✕</button>
+            </div>
+            <div className="p-6">
+              {cancelStep === "confirm" && (
+                <div className="text-center">
+                  <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-2xl">😢</span>
+                  </div>
+                  <h4 className="text-base font-bold text-gray-900 mb-2">Tem certeza?</h4>
+                  <p className="text-xs text-gray-500 font-medium mb-5">
+                    Ao cancelar, você perde acesso às transcrições ilimitadas e todos os recursos Premium.
+                    Seu acesso continua até <strong className="text-gray-800">{subscriptionData?.expires_at ? formatDate(subscriptionData.expires_at) : "o fim do período"}</strong>.
+                  </p>
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5">
+                    <p className="text-xs text-amber-800 font-semibold">💡 Você não será reembolsado pelo período restante.</p>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => setShowCancelModal(false)} className="flex-1 py-3 border border-gray-200 text-gray-600 font-semibold text-xs rounded-xl hover:bg-gray-50 transition-all">Manter Premium</button>
+                    <button onClick={() => setCancelStep("final")} className="flex-1 py-3 border border-red-200 text-red-500 font-semibold text-xs rounded-xl hover:bg-red-50 transition-all">Sim, cancelar</button>
+                  </div>
+                </div>
+              )}
+              {cancelStep === "final" && (
+                <div className="text-center">
+                  <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Trash2 className="w-6 h-6 text-red-500" />
+                  </div>
+                  <h4 className="text-base font-bold text-gray-900 mb-2">Confirmação final</h4>
+                  <p className="text-xs text-gray-500 font-medium mb-5">Esta ação não pode ser desfeita. Sua assinatura será cancelada imediatamente.</p>
+                  {cancelError && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
+                      <p className="text-xs text-red-600 font-semibold">{cancelError}</p>
+                    </div>
+                  )}
+                  <div className="flex gap-3">
+                    <button onClick={() => setCancelStep("confirm")} disabled={isCancelling} className="flex-1 py-3 border border-gray-200 text-gray-600 font-semibold text-xs rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50">Voltar</button>
+                    <button
+                      onClick={handleCancelSubscription}
+                      disabled={isCancelling}
+                      className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-bold text-xs rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isCancelling ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Cancelando...</> : "Cancelar definitivamente"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
