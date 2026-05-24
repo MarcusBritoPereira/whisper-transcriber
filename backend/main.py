@@ -31,6 +31,7 @@ API_KEYS = {k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()
 API_KEY_TENANTS_RAW = os.getenv("API_KEY_TENANTS", "")
 ALLOWED_DOWNLOAD_DOMAINS = {d.strip() for d in os.getenv("ALLOWED_DOWNLOAD_DOMAINS", "youtube.com,youtu.be,vimeo.com,tiktok.com").split(",") if d.strip()}
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "20"))
+JOB_RETENTION_DAYS = int(os.getenv("JOB_RETENTION_DAYS", "7"))
 
 
 def parse_api_key_tenants(raw: str) -> dict[str, str]:
@@ -125,6 +126,15 @@ def init_db() -> None:
     conn.close()
 
 
+def validate_runtime_config() -> None:
+    if not API_KEYS:
+        raise RuntimeError("API_KEYS must be configured for production usage")
+    if API_KEY_TENANTS:
+        missing = [k for k in API_KEYS if k not in API_KEY_TENANTS]
+        if missing:
+            raise RuntimeError(f"API_KEY_TENANTS is missing mappings for {len(missing)} key(s)")
+
+
 def insert_job(job_id: str, input_path: str, request_payload: dict, tenant_id: str) -> None:
     now = utc_now_iso()
     conn = db_conn()
@@ -159,6 +169,40 @@ def get_job_by_id(job_id: str) -> Optional[sqlite3.Row]:
     conn.close()
     return row
 
+
+def delete_job_for_tenant(job_id: str, tenant_id: str) -> Optional[str]:
+    conn = db_conn()
+    row = conn.execute("SELECT input_path FROM jobs WHERE id=? AND tenant_id=?", (job_id, tenant_id)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    with conn:
+        conn.execute("DELETE FROM jobs WHERE id=? AND tenant_id=?", (job_id, tenant_id))
+    conn.close()
+    return row["input_path"]
+
+
+def purge_old_jobs() -> int:
+    cutoff = datetime.now(timezone.utc).timestamp() - (JOB_RETENTION_DAYS * 86400)
+    conn = db_conn()
+    rows = conn.execute("SELECT id, input_path, created_at FROM jobs").fetchall()
+    to_delete: list[tuple[str, Optional[str]]] = []
+    for row in rows:
+        try:
+            created_ts = datetime.fromisoformat(row["created_at"]).timestamp()
+        except Exception:
+            continue
+        if created_ts < cutoff:
+            to_delete.append((row["id"], row["input_path"]))
+    if to_delete:
+        with conn:
+            conn.executemany("DELETE FROM jobs WHERE id=?", [(job_id,) for job_id, _ in to_delete])
+    conn.close()
+    for _, path in to_delete:
+        remove_local_file(path)
+    return len(to_delete)
+
+
 def remove_local_file(path: Optional[str]) -> None:
     if path and os.path.exists(path):
         os.remove(path)
@@ -169,6 +213,8 @@ def validate_api_key(x_api_key: Optional[str]) -> str:
         raise HTTPException(status_code=503, detail="Server misconfigured: API_KEYS is required")
     if not x_api_key or x_api_key not in API_KEYS:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    if API_KEY_TENANTS and x_api_key not in API_KEY_TENANTS:
+        raise HTTPException(status_code=401, detail="API key tenant mapping missing")
     return API_KEY_TENANTS.get(x_api_key, x_api_key[-8:])
 
 
@@ -252,6 +298,27 @@ def process_job(job_id: str) -> None:
     # remove_local_file(row["input_path"])
 
 
+def retry_job_for_tenant(job_id: str, tenant_id: str) -> Optional[str]:
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT id, status FROM jobs WHERE id=? AND tenant_id=?",
+        (job_id, tenant_id),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    if row["status"] in {"queued", "processing"}:
+        conn.close()
+        return row["status"]
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status=?, updated_at=?, result_json=?, error=? WHERE id=? AND tenant_id=?",
+            ("queued", utc_now_iso(), None, None, job_id, tenant_id),
+        )
+    conn.close()
+    return "queued"
+
+
 def worker() -> None:
     logger.info("WORKER_THREAD_READY")
     while True:
@@ -267,7 +334,9 @@ def worker() -> None:
 
 @app.on_event("startup")
 def startup() -> None:
+    validate_runtime_config()
     init_db()
+    deleted_count = purge_old_jobs()
     
     # Re-queue unfinished jobs
     conn = db_conn()
@@ -280,7 +349,7 @@ def startup() -> None:
         
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    logger.info("service_started", extra={"app": APP_TITLE, "requeued_count": len(unfinished)})
+    logger.info("service_started", extra={"app": APP_TITLE, "requeued_count": len(unfinished), "purged_jobs": deleted_count})
 
 
 @app.get("/healthz")
@@ -480,6 +549,30 @@ def download_job_audio(job_id: str, x_api_key: Optional[str] = Header(None)):
     from fastapi.responses import FileResponse
     filename = os.path.basename(path)
     return FileResponse(path, filename=f"audio_{job_id}{os.path.splitext(filename)[1]}")
+
+
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: str, x_api_key: Optional[str] = Header(None)):
+    tenant_id = validate_api_key(x_api_key)
+    input_path = delete_job_for_tenant(job_id, tenant_id)
+    if input_path is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    remove_local_file(input_path)
+    return {"job_id": job_id, "deleted": True}
+
+
+@app.post("/jobs/{job_id}/retry")
+def retry_job(job_id: str, x_api_key: Optional[str] = Header(None)):
+    tenant_id = validate_api_key(x_api_key)
+    status = retry_job_for_tenant(job_id, tenant_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if status == "processing":
+        return {"job_id": job_id, "status": "processing"}
+    if status == "queued":
+        _job_queue.put(job_id)
+        return {"job_id": job_id, "status": "queued"}
+    return {"job_id": job_id, "status": status}
 
 
 @app.post("/translate_text")

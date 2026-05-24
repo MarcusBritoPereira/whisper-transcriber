@@ -11,6 +11,8 @@ Sistema de transcrição com FastAPI + Whisper + frontend Next.js.
 - Autenticação por API Key (`X-API-Key`) obrigatória.
 - Isolamento multi-tenant por chave de API nos endpoints de jobs.
 - Rate limiting por tenant+IP em memória.
+- Exclusão de job por tenant (`DELETE /jobs/{job_id}`).
+- Reprocessamento de job por tenant (`POST /jobs/{job_id}/retry`).
 - CORS configurável por variável de ambiente.
 - Whitelist de domínios para ingestão por URL.
 
@@ -27,10 +29,11 @@ uvicorn main:app --reload --port 8000
 ### Variáveis de ambiente
 
 - `API_KEYS`: chaves separadas por vírgula (obrigatório).
-- `API_KEY_TENANTS`: mapeamento `api_key:tenant_id` separado por vírgula (opcional; fallback usa sufixo da chave).
+- `API_KEY_TENANTS`: mapeamento `api_key:tenant_id` separado por vírgula (opcional, mas se definido deve conter todas as chaves de `API_KEYS`).
 - `ALLOWED_ORIGINS`: origins separadas por vírgula.
 - `ALLOWED_DOWNLOAD_DOMAINS`: domínios permitidos para ingestão via URL.
 - `RATE_LIMIT_PER_MIN`: limite por minuto por `tenant+IP`.
+- `JOB_RETENTION_DAYS`: retenção de jobs/áudios locais (purga automática no startup, default `7`).
 - `MAX_FILE_MB`: limite de upload.
 - `UPLOAD_DIR`, `RESULTS_DIR`, `DB_PATH`.
 - `HF_TOKEN`: habilita diarização com pyannote.

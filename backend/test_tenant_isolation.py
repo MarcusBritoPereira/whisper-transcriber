@@ -69,7 +69,27 @@ class TenantIsolationTests(unittest.TestCase):
         resp = self.client.get("/jobs/job-a", headers={"X-API-Key": "keyB"})
         self.assertEqual(resp.status_code, 404)
 
+    def test_delete_is_tenant_scoped(self):
+        self.main.insert_job("job-a", "/tmp/a.wav", {"mode": "rapido"}, "tenantA")
+        self.main.insert_job("job-b", "/tmp/b.wav", {"mode": "rapido"}, "tenantB")
+
+        resp = self.client.delete("/jobs/job-a", headers={"X-API-Key": "keyB"})
+        self.assertEqual(resp.status_code, 404)
+
+        resp_ok = self.client.delete("/jobs/job-a", headers={"X-API-Key": "keyA"})
+        self.assertEqual(resp_ok.status_code, 200)
+
+    def test_retry_is_tenant_scoped(self):
+        self.main.insert_job("job-a", "/tmp/a.wav", {"mode": "rapido"}, "tenantA")
+        self.main.update_job("job-a", "failed", error="x")
+
+        resp_forbidden = self.client.post("/jobs/job-a/retry", headers={"X-API-Key": "keyB"})
+        self.assertEqual(resp_forbidden.status_code, 404)
+
+        resp_ok = self.client.post("/jobs/job-a/retry", headers={"X-API-Key": "keyA"})
+        self.assertEqual(resp_ok.status_code, 200)
+        self.assertEqual(resp_ok.json()["status"], "queued")
+
 
 if __name__ == "__main__":
     unittest.main()
-
