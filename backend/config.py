@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
     
+    # Translation compliance
+    TRANSLATION_PROVIDER: str = "none"  # supported: aws_translate
+    AWS_REGION: str = "us-east-1"
+
+    # Upload hardening / quotas
+    MAX_AUDIO_DURATION_SECONDS: int = 7200
+    TENANT_MAX_FILE_MB: str = ""  # format tenant_id:mb,tenant2:mb
     # Download Restrictions
     ALLOWED_DOWNLOAD_DOMAINS: str = "youtube.com,youtu.be,vimeo.com,tiktok.com,instagram.com,twitch.tv,dailymotion.com,facebook.com,fb.watch,kwai.com"
     
@@ -91,6 +98,21 @@ class Settings(BaseSettings):
     @property
     def parsed_download_domains(self) -> Set[str]:
         return {d.strip() for d in self.ALLOWED_DOWNLOAD_DOMAINS.split(",") if d.strip()}
+
+    @property
+    def parsed_tenant_max_file_mb(self) -> Dict[str, int]:
+        mapping: Dict[str, int] = {}
+        for item in self.TENANT_MAX_FILE_MB.split(","):
+            item = item.strip()
+            if not item or ":" not in item:
+                continue
+            tenant, value = item.split(":", 1)
+            tenant = tenant.strip()
+            try:
+                mapping[tenant] = int(value.strip())
+            except ValueError:
+                continue
+        return mapping
 
 
 settings = Settings()

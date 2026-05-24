@@ -10,6 +10,7 @@ Sistema SaaS de transcrição com **FastAPI + Faster-Whisper + Next.js**, com pr
 - **Banco**: PostgreSQL (SQLAlchemy)
 - **Armazenamento de áudio**: S3/MinIO
 - **Frontend**: Next.js
+- **Tradução**: AWS Translate (provedor enterprise)
 
 ## Recursos implementados
 
@@ -69,6 +70,8 @@ npm run dev
 - `DATABASE_URL` (ou `POSTGRES_*`)
 - `REDIS_URL`
 - `S3_BUCKET_NAME`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+- `TRANSLATION_PROVIDER=aws_translate`, `AWS_REGION`
+- `MAX_AUDIO_DURATION_SECONDS`, `TENANT_MAX_FILE_MB`
 
 ### Frontend
 

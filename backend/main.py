@@ -7,6 +7,7 @@ import threading
 import logging
 import hmac
 import hashlib
+import subprocess
 import urllib.request
 import urllib.parse
 import socket
@@ -15,7 +16,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Header, Request, Query, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Header, Request, Query, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -28,6 +29,7 @@ from models.payment import TenantSubscription, AppmaxWebhookLog
 from services.auth import get_tenant_id
 from services.storage import upload_file, delete_file, ensure_bucket_exists, generate_presigned_download_url
 from services.transcriber import transcriber_service
+from services.translation import translation_service
 from services.email import send_welcome_email, send_cancellation_email
 from tasks.transcription import transcribe_job_task
 from tasks.payments import process_appmax_webhook_task, process_abacate_webhook_task
@@ -40,6 +42,8 @@ except Exception:
 # Initialize Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+METRICS = {"requests_total": 0, "jobs_queued": 0, "jobs_completed": 0, "jobs_failed": 0}
 
 # Initialize FastAPI App
 app = FastAPI(title=settings.APP_TITLE)
@@ -415,6 +419,25 @@ def purge_old_jobs(db: Session) -> int:
     return count
 
 
+def _validate_media_file(path: str) -> None:
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nokey=1:noprint_wrappers=1", path]
+    probe = subprocess.run(cmd, capture_output=True, text=True)
+    if probe.returncode != 0:
+        raise HTTPException(status_code=400, detail="Invalid media file or codec")
+    try:
+        duration = float((probe.stdout or "0").strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unable to parse media duration")
+    if duration <= 0:
+        raise HTTPException(status_code=400, detail="Invalid media duration")
+    if duration > settings.MAX_AUDIO_DURATION_SECONDS:
+        raise HTTPException(status_code=413, detail="Audio duration exceeds plan limits")
+
+
+def _tenant_file_size_limit_mb(tenant_id: str) -> int:
+    return settings.parsed_tenant_max_file_mb.get(tenant_id, settings.MAX_FILE_MB)
+
+
 def format_timestamp(seconds: float, srt: bool = False) -> str:
     ms = int((seconds - int(seconds)) * 1000)
     s = int(seconds)
@@ -447,6 +470,16 @@ def to_vtt(segments: list[dict]) -> str:
         line = f"<v {speaker}>{text}" if speaker else text
         out.append(f"{start} --> {end}\n{line}\n")
     return "\n".join(out)
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    correlation_id = request.headers.get("x-correlation-id") or str(uuid.uuid4())
+    request.state.correlation_id = correlation_id
+    METRICS["requests_total"] += 1
+    response = await call_next(request)
+    response.headers["x-correlation-id"] = correlation_id
+    return response
 
 
 # FastAPI Lifecycle Hooks
@@ -482,6 +515,11 @@ def readyz(db: Session = Depends(get_db)):
     return {"status": "ready"}
 
 
+@app.get("/metrics")
+def metrics():
+    return METRICS
+
+
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_audio_sync(
     request: Request,
@@ -505,8 +543,9 @@ async def transcribe_audio_sync(
     temp_path = ""
 
     if file:
-        if file.size and file.size > settings.MAX_FILE_MB * 1024 * 1024:
-            raise HTTPException(status_code=413, detail=f"File too large (max {settings.MAX_FILE_MB}MB)")
+        max_mb = _tenant_file_size_limit_mb(tenant_id)
+        if file.size and file.size > max_mb * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"File too large (max {max_mb}MB)")
 
         allowed_extensions = (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".opus", ".mp4", ".mpeg", ".webm")
         filename = file.filename or "audio"
@@ -517,11 +556,15 @@ async def transcribe_audio_sync(
         temp_path = os.path.join(settings.UPLOAD_DIR, f"{file_id}{ext}")
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        _validate_media_file(temp_path)
+        _validate_media_file(temp_path)
     else:
         if not allowed_url(url or ""):
             raise HTTPException(status_code=400, detail="URL domain is not allowed")
         temp_template = os.path.join(settings.UPLOAD_DIR, f"{file_id}.%(ext)s")
         temp_path = transcriber_service.download_from_url(url or "", temp_template)
+        _validate_media_file(temp_path)
+        _validate_media_file(temp_path)
 
     if not temp_path or not os.path.exists(temp_path):
         raise HTTPException(status_code=500, detail="Error retrieving audio file.")
@@ -568,6 +611,9 @@ async def transcribe_audio_job(
     s3_key = f"uploads/{tenant_id}/{job_id}"
 
     if file:
+        max_mb = _tenant_file_size_limit_mb(tenant_id)
+        if file.size and file.size > max_mb * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"File too large (max {max_mb}MB)")
         filename = file.filename or "audio"
         ext = os.path.splitext(filename)[1] or ".mp3"
         temp_path = os.path.join(settings.UPLOAD_DIR, f"temp_{job_id}{ext}")
@@ -575,11 +621,13 @@ async def transcribe_audio_job(
         
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        _validate_media_file(temp_path)
     else:
         if not allowed_url(url or ""):
             raise HTTPException(status_code=400, detail="URL domain is not allowed")
         temp_template = os.path.join(settings.UPLOAD_DIR, f"temp_{job_id}.%(ext)s")
         temp_path = transcriber_service.download_from_url(url or "", temp_template)
+        _validate_media_file(temp_path)
 
     if not temp_path or not os.path.exists(temp_path):
         raise HTTPException(status_code=500, detail="Error downloading input file.")
@@ -617,7 +665,8 @@ async def transcribe_audio_job(
 
     # 3. Offload processing task to Celery worker cluster
     transcribe_job_task.delay(job_id)
-    
+    METRICS["jobs_queued"] += 1
+
     return {"job_id": job_id, "status": "queued"}
 
 
@@ -733,24 +782,18 @@ def retry_job(job_id: str, tenant_id: str = Depends(get_tenant_id), db: Session 
     
     # Re-dispatch Celery background task
     transcribe_job_task.delay(job_id)
-    
+    METRICS["jobs_queued"] += 1
+
     return {"job_id": job_id, "status": "queued"}
 
 
 @app.post("/translate_text")
 async def translate_text_endpoint(req: TranslateRequest):
     try:
-        from deep_translator import GoogleTranslator
-
-        translator = GoogleTranslator(source="auto", target=req.target_language)
-
-        chunk_size = 4000
-        chunks = [req.text[i:i + chunk_size] for i in range(0, len(req.text), chunk_size)]
-        translated_chunks = [translator.translate(chunk) for chunk in chunks]
-
-        return {"translated_text": " ".join(translated_chunks)}
+        translated = translation_service.translate(req.text, req.target_language, source_language="auto")
+        return {"translated_text": translated}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.post("/summarize")

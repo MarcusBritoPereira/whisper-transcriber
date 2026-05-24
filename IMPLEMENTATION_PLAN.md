@@ -23,15 +23,16 @@ Levar o Whisper Transcriber de MVP para SaaS pronto para produção, com foco em
 ### Fase 2 (P0/P1) — iniciada neste commit
 - [x] Rate limiting distribuído com Redis por tenant+IP, com fallback seguro para memória.
 - [x] SSRF avançado com resolução DNS e bloqueio de IPs privados/loopback/link-local/reserved.
-- [ ] Cotas de upload por tenant e validação de MIME real.
+- [x] Cotas de upload por tenant, validação de codec e duração via ffprobe.
 
-### Fase 3 (P1)
-- Observabilidade: request-id, logs estruturados, métricas de job e fila.
-- Webhooks de status de jobs para clientes SaaS.
+### Fase 3 (P1) — parcialmente iniciada
+- [x] Correlation ID em todas as respostas HTTP.
+- [x] Endpoint básico de métricas operacionais (`/metrics`).
+- [x] Webhooks de status de jobs com retry e idempotency key.
 
-### Fase 4 (P1/P2)
-- Governança de dados (retenção por tenant, exclusão e trilha auditável).
-- CI quality gates (lint, type-check, testes, segurança de dependências).
+### Fase 4 (P1/P2) — iniciada
+- [ ] Governança de dados (retenção por tenant, exclusão e trilha auditável).
+- [x] CI com testes/lint/type-check/security pipeline (baseline).
 
 ## Critérios de aceite da Fase 1
 - Não existe API key hardcoded no frontend.
