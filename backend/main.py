@@ -9,6 +9,8 @@ import hmac
 import hashlib
 import urllib.request
 import urllib.parse
+import socket
+import ipaddress
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import List, Optional
@@ -30,6 +32,11 @@ from services.email import send_welcome_email, send_cancellation_email
 from tasks.transcription import transcribe_job_task
 from tasks.payments import process_appmax_webhook_task, process_abacate_webhook_task
 
+try:
+    from redis import Redis
+except Exception:
+    Redis = None
+
 # Initialize Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -50,9 +57,19 @@ app.add_middleware(
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.RESULTS_DIR, exist_ok=True)
 
-# Rate Limit Tracker (Redis backing can be added, currently keeping memory IP+Tenant track)
+# Rate Limit Tracker (fallback in-memory when Redis is unavailable)
 _rate_limit_window: dict[str, list[float]] = {}
 _rate_limit_lock = threading.Lock()
+
+redis_client = None
+if Redis is not None:
+    try:
+        redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+        redis_client.ping()
+        logger.info("rate_limit_backend=redis")
+    except Exception as redis_error:
+        logger.warning(f"rate_limit_backend=memory reason={redis_error}")
+        redis_client = None
 
 
 # Pydantic Schemas
@@ -278,14 +295,37 @@ def validate_runtime_config() -> None:
     api_keys = settings.parsed_api_keys
     if not api_keys:
         raise RuntimeError("API_KEYS must be configured for production usage")
+    if any(k.lower().startswith("sua_chave") for k in api_keys):
+        raise RuntimeError("API_KEYS contains placeholder values. Configure real keys.")
+
     api_key_tenants = settings.parsed_api_key_tenants
-    if api_key_tenants:
-        missing = [k for k in api_keys if k not in api_key_tenants]
-        if missing:
-            raise RuntimeError(f"API_KEY_TENANTS is missing mappings for {len(missing)} key(s)")
+    if not api_key_tenants:
+        raise RuntimeError("API_KEY_TENANTS must map all API keys to tenant IDs")
+
+    missing = [k for k in api_keys if k not in api_key_tenants]
+    if missing:
+        raise RuntimeError(f"API_KEY_TENANTS is missing mappings for {len(missing)} key(s)")
+
+    if not settings.JWT_SECRET or len(settings.JWT_SECRET) < 32:
+        raise RuntimeError("JWT_SECRET must be configured with at least 32 characters")
 
 
 def check_rate_limit(client_id: str) -> None:
+    redis_key = f"ratelimit:{client_id}"
+
+    if redis_client is not None:
+        try:
+            current_value = redis_client.incr(redis_key)
+            if current_value == 1:
+                redis_client.expire(redis_key, 60)
+            if current_value > settings.RATE_LIMIT_PER_MIN:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            return
+        except HTTPException:
+            raise
+        except Exception as redis_error:
+            logger.warning(f"rate_limit_redis_error={redis_error}; falling back to memory window")
+
     now = time.time()
     with _rate_limit_lock:
         window = _rate_limit_window.setdefault(client_id, [])
@@ -296,18 +336,58 @@ def check_rate_limit(client_id: str) -> None:
         window.append(now)
 
 
+def _host_resolves_to_public_ip(host: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+
+    for info in infos:
+        ip_raw = info[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_raw)
+        except ValueError:
+            return False
+
+        if (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_multicast
+            or ip_obj.is_reserved
+            or ip_obj.is_unspecified
+        ):
+            logger.warning(f"Blocked potential SSRF attack: resolved IP {ip_obj} is not public.")
+            return False
+
+    return True
+
+
 def allowed_url(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return False
+
     host = parsed.hostname or ""
-    
-    # Strict SSRF Defense: Block private/local IP requests if pointing to local subnets
-    if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith(("192.168.", "10.", "172.16.", "172.31.")):
+    if not host:
+        return False
+
+    if not any(host == d or host.endswith(f".{d}") for d in settings.parsed_download_domains):
+        return False
+
+    if host in {"localhost", "127.0.0.1", "0.0.0.0"}:
         logger.warning(f"Blocked potential SSRF attack: host {host} requested.")
         return False
-        
-    return any(host == d or host.endswith(f".{d}") for d in settings.parsed_download_domains)
+
+    try:
+        parsed_ip = ipaddress.ip_address(host)
+        if parsed_ip.is_private or parsed_ip.is_loopback or parsed_ip.is_link_local or parsed_ip.is_reserved:
+            logger.warning(f"Blocked potential SSRF attack: direct IP host {host} is not public.")
+            return False
+    except ValueError:
+        pass
+
+    return _host_resolves_to_public_ip(host)
 
 
 def purge_old_jobs(db: Session) -> int:

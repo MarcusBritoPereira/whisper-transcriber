@@ -33,29 +33,29 @@ class Settings(BaseSettings):
     S3_REGION_NAME: Optional[str] = "us-east-1"
     
     # Security, TENANTS & Rate Limits
-    API_KEYS: str = "sua_chave_1,sua_chave_2"
-    API_KEY_TENANTS: str = "sua_chave_1:tenant_default,sua_chave_2:tenant_secondary"
+    API_KEYS: str = ""
+    API_KEY_TENANTS: str = ""
     RATE_LIMIT_PER_MIN: int = 20
     JOB_RETENTION_DAYS: int = 7
     
     # JWT Auth Config
-    JWT_SECRET: str = "saas-production-super-secret-key-change-in-prod"
+    JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
     
     # Download Restrictions
     ALLOWED_DOWNLOAD_DOMAINS: str = "youtube.com,youtu.be,vimeo.com,tiktok.com,instagram.com,twitch.tv,dailymotion.com,facebook.com,fb.watch,kwai.com"
     
     # Appmax Payment Config
-    APPMAX_API_KEY: str = "sua_chave_appmax_default"
+    APPMAX_API_KEY: str = ""
     APPMAX_SANDBOX: bool = True
-    APPMAX_SIGNATURE_SECRET: str = "sua_signature_secret_default"
+    APPMAX_SIGNATURE_SECRET: str = ""
     
     # Abacate Pay Config
-    ABACATE_API_KEY: str = "abc_dev_Gb0MsBUM5UGd66pNEzZTp6GX"
-    ABACATE_WEBHOOK_SECRET: str = "sua_signature_secret_default"
+    ABACATE_API_KEY: str = ""
+    ABACATE_WEBHOOK_SECRET: str = ""
 
     # Resend Email Config
-    RESEND_API_KEY: str = "sua_resend_api_key"
+    RESEND_API_KEY: str = ""
     EMAIL_FROM_NAME: str = "UPscribe"
     APP_URL: str = "http://localhost:3000"
     

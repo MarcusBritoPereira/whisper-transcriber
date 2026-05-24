@@ -38,7 +38,10 @@ import {
 import axios from "axios";
 
 // Configure default X-API-Key header for Axios requests
-axios.defaults.headers.common["X-API-Key"] = "sua_chave_cliente";
+const CLIENT_API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+if (CLIENT_API_KEY) {
+  axios.defaults.headers.common["X-API-Key"] = CLIENT_API_KEY;
+}
 
 interface Segment {
   speaker: string;
@@ -137,10 +140,17 @@ export default function HomePage() {
 
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
+  const assertClientApiKey = () => {
+    if (!CLIENT_API_KEY) {
+      throw new Error("NEXT_PUBLIC_API_KEY não configurada no frontend.");
+    }
+  };
+
   // Subscription Status check and payment redirection parameters
   React.useEffect(() => {
     const checkSubscription = async () => {
       try {
+        assertClientApiKey();
         const response = await axios.get(`${apiBaseUrl}/api/v1/payments/subscription-status`);
         setSubscriptionStatus(response.data.status);
         setSubscriptionData(response.data);
@@ -167,6 +177,7 @@ export default function HomePage() {
     setIsCancelling(true);
     setCancelError(null);
     try {
+      assertClientApiKey();
       await axios.post(`${apiBaseUrl}/api/v1/payments/cancel`, {
         email: checkoutForm.email || "",
         name: `${checkoutForm.first_name || ""} ${checkoutForm.last_name || ""}`.trim() || "Usuário",
@@ -217,6 +228,7 @@ export default function HomePage() {
   const loadHistory = async () => {
     setIsLoadingHistory(true);
     try {
+      assertClientApiKey();
       const response = await axios.get(`${apiBaseUrl}/jobs`);
       setHistoryJobs(response.data);
     } catch (err) {
@@ -253,6 +265,7 @@ export default function HomePage() {
       if (hasPending) {
         interval = setInterval(async () => {
           try {
+            assertClientApiKey();
             const response = await axios.get(`${apiBaseUrl}/jobs`);
             setHistoryJobs(response.data);
           } catch (e) {
