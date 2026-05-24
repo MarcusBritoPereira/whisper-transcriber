@@ -6,7 +6,6 @@ torch==2.5.1
 torchaudio==2.5.1
 pyannote.audio==3.3.2
 yt-dlp==2026.3.17
-deep-translator==1.11.4
 sumy==0.11.0
 python-dotenv==1.2.2
 

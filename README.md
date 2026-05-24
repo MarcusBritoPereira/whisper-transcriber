@@ -1,20 +1,39 @@
 # Whisper Transcriber
 
-Sistema de transcrição com FastAPI + Whisper + frontend Next.js.
+Sistema SaaS de transcrição com **FastAPI + Faster-Whisper + Next.js**, com processamento assíncrono e isolamento por tenant.
+
+## Stack atual
+
+- **API**: FastAPI
+- **Worker**: Celery
+- **Fila/Backend de tarefas**: Redis
+- **Banco**: PostgreSQL (SQLAlchemy)
+- **Armazenamento de áudio**: S3/MinIO
+- **Frontend**: Next.js
+- **Tradução**: AWS Translate (provedor enterprise)
 
 ## Recursos implementados
 
-- Transcrição síncrona (`/transcribe`) e assíncrona com jobs (`/jobs/transcribe`).
-- Persistência de jobs em SQLite (`transcriptions.db`).
+- Transcrição síncrona (`/transcribe`) e assíncrona (`/jobs/transcribe`).
+- Persistência de jobs com `tenant_id`.
 - Exportação de resultado em `json`, `txt`, `srt`, `vtt`.
-- Health checks (`/healthz`, `/readyz`).
-- Autenticação por API Key (`X-API-Key`) obrigatória.
-- Isolamento multi-tenant por chave de API nos endpoints de jobs.
-- Rate limiting por tenant+IP em memória.
-- Exclusão de job por tenant (`DELETE /jobs/{job_id}`).
-- Reprocessamento de job por tenant (`POST /jobs/{job_id}/retry`).
-- CORS configurável por variável de ambiente.
-- Whitelist de domínios para ingestão por URL.
+- Health/readiness checks (`/healthz`, `/readyz`).
+- Autenticação por JWT Bearer ou `X-API-Key` (compatibilidade legada).
+- Isolamento multi-tenant em endpoints de jobs.
+- Limpeza automática de jobs antigos no startup.
+- Upload para object storage e download por URL pré-assinada.
+
+## Infra local (Docker)
+
+```bash
+docker compose up -d db redis minio
+```
+
+Serviços locais:
+- PostgreSQL: `localhost:5432`
+- Redis: `localhost:6381`
+- MinIO API: `localhost:9000`
+- MinIO Console: `localhost:9001`
 
 ## Backend
 
@@ -26,17 +45,12 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### Variáveis de ambiente
+## Worker Celery
 
-- `API_KEYS`: chaves separadas por vírgula (obrigatório).
-- `API_KEY_TENANTS`: mapeamento `api_key:tenant_id` separado por vírgula (opcional, mas se definido deve conter todas as chaves de `API_KEYS`).
-- `ALLOWED_ORIGINS`: origins separadas por vírgula.
-- `ALLOWED_DOWNLOAD_DOMAINS`: domínios permitidos para ingestão via URL.
-- `RATE_LIMIT_PER_MIN`: limite por minuto por `tenant+IP`.
-- `JOB_RETENTION_DAYS`: retenção de jobs/áudios locais (purga automática no startup, default `7`).
-- `MAX_FILE_MB`: limite de upload.
-- `UPLOAD_DIR`, `RESULTS_DIR`, `DB_PATH`.
-- `HF_TOKEN`: habilita diarização com pyannote.
+```bash
+cd backend
+celery -A tasks.celery_app.celery_app worker --loglevel=info
+```
 
 ## Frontend
 
@@ -46,12 +60,26 @@ npm install
 npm run dev
 ```
 
-Variável:
+## Variáveis obrigatórias
 
-- `NEXT_PUBLIC_API_BASE_URL` (default: `http://localhost:8000`)
+### Backend
+
+- `API_KEYS` (lista CSV de chaves válidas)
+- `API_KEY_TENANTS` (mapeamento `api_key:tenant_id` para todas as chaves)
+- `JWT_SECRET` (mínimo 32 caracteres)
+- `DATABASE_URL` (ou `POSTGRES_*`)
+- `REDIS_URL`
+- `S3_BUCKET_NAME`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+- `TRANSLATION_PROVIDER=aws_translate`, `AWS_REGION`
+- `MAX_AUDIO_DURATION_SECONDS`, `TENANT_MAX_FILE_MB`
+
+### Frontend
+
+- `NEXT_PUBLIC_API_BASE_URL` (ex.: `http://localhost:8000`)
+- `NEXT_PUBLIC_API_KEY` (obrigatória para chamadas autenticadas do cliente)
 
 ## Fluxo assíncrono
 
 1. `POST /jobs/transcribe`
-2. `GET /jobs/{job_id}` até status `completed`
+2. `GET /jobs/{job_id}` até `completed`
 3. `GET /jobs/{job_id}/result?format=srt`

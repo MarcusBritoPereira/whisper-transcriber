@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import urllib.request
 from tasks.celery_app import celery_app
 from database import SessionLocal
 from models.jobs import Job
@@ -10,6 +11,35 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+
+
+
+def _emit_job_webhook(event_key: str, job: Job, max_attempts: int = 3) -> None:
+    req_payload = json.loads(job.request_json) if job.request_json else {}
+    webhook_url = req_payload.get("webhook_url")
+    if not webhook_url:
+        return
+
+    body = {
+        "event": event_key,
+        "job_id": job.id,
+        "tenant_id": job.tenant_id,
+        "status": job.status,
+        "updated_at": job.updated_at,
+        "idempotency_key": f"{event_key}:{job.id}:{job.updated_at}",
+    }
+    payload = json.dumps(body).encode("utf-8")
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            req = urllib.request.Request(webhook_url, data=payload, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("X-Idempotency-Key", body["idempotency_key"])
+            with urllib.request.urlopen(req, timeout=10) as response:
+                if response.status < 300:
+                    return
+        except Exception as exc:
+            logger.warning(f"Webhook attempt {attempt} failed for job {job.id}: {exc}")
 
 def utc_now_iso() -> str:
     from datetime import datetime, timezone
@@ -57,6 +87,7 @@ def transcribe_job_task(self, job_id: str) -> None:
         job.result_json = json.dumps(result, ensure_ascii=False)
         job.updated_at = utc_now_iso()
         db.commit()
+        _emit_job_webhook("job.completed", job)
         logger.info(f"Celery task successfully completed job {job_id}!")
 
     except Exception as exc:
@@ -71,6 +102,7 @@ def transcribe_job_task(self, job_id: str) -> None:
             job.error = str(exc)
             job.updated_at = utc_now_iso()
             db.commit()
+            _emit_job_webhook("job.failed", job)
 
     finally:
         # Guarantee cleanup of temporary local files inside the worker container

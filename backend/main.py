@@ -7,13 +7,16 @@ import threading
 import logging
 import hmac
 import hashlib
+import subprocess
 import urllib.request
 import urllib.parse
+import socket
+import ipaddress
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Header, Request, Query, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Header, Request, Query, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -26,13 +29,21 @@ from models.payment import TenantSubscription, AppmaxWebhookLog
 from services.auth import get_tenant_id
 from services.storage import upload_file, delete_file, ensure_bucket_exists, generate_presigned_download_url
 from services.transcriber import transcriber_service
+from services.translation import translation_service
 from services.email import send_welcome_email, send_cancellation_email
 from tasks.transcription import transcribe_job_task
 from tasks.payments import process_appmax_webhook_task, process_abacate_webhook_task
 
+try:
+    from redis import Redis
+except Exception:
+    Redis = None
+
 # Initialize Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+METRICS = {"requests_total": 0, "jobs_queued": 0, "jobs_completed": 0, "jobs_failed": 0}
 
 # Initialize FastAPI App
 app = FastAPI(title=settings.APP_TITLE)
@@ -50,9 +61,19 @@ app.add_middleware(
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.RESULTS_DIR, exist_ok=True)
 
-# Rate Limit Tracker (Redis backing can be added, currently keeping memory IP+Tenant track)
+# Rate Limit Tracker (fallback in-memory when Redis is unavailable)
 _rate_limit_window: dict[str, list[float]] = {}
 _rate_limit_lock = threading.Lock()
+
+redis_client = None
+if Redis is not None:
+    try:
+        redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+        redis_client.ping()
+        logger.info("rate_limit_backend=redis")
+    except Exception as redis_error:
+        logger.warning(f"rate_limit_backend=memory reason={redis_error}")
+        redis_client = None
 
 
 # Pydantic Schemas
@@ -278,14 +299,37 @@ def validate_runtime_config() -> None:
     api_keys = settings.parsed_api_keys
     if not api_keys:
         raise RuntimeError("API_KEYS must be configured for production usage")
+    if any(k.lower().startswith("sua_chave") for k in api_keys):
+        raise RuntimeError("API_KEYS contains placeholder values. Configure real keys.")
+
     api_key_tenants = settings.parsed_api_key_tenants
-    if api_key_tenants:
-        missing = [k for k in api_keys if k not in api_key_tenants]
-        if missing:
-            raise RuntimeError(f"API_KEY_TENANTS is missing mappings for {len(missing)} key(s)")
+    if not api_key_tenants:
+        raise RuntimeError("API_KEY_TENANTS must map all API keys to tenant IDs")
+
+    missing = [k for k in api_keys if k not in api_key_tenants]
+    if missing:
+        raise RuntimeError(f"API_KEY_TENANTS is missing mappings for {len(missing)} key(s)")
+
+    if not settings.JWT_SECRET or len(settings.JWT_SECRET) < 32:
+        raise RuntimeError("JWT_SECRET must be configured with at least 32 characters")
 
 
 def check_rate_limit(client_id: str) -> None:
+    redis_key = f"ratelimit:{client_id}"
+
+    if redis_client is not None:
+        try:
+            current_value = redis_client.incr(redis_key)
+            if current_value == 1:
+                redis_client.expire(redis_key, 60)
+            if current_value > settings.RATE_LIMIT_PER_MIN:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            return
+        except HTTPException:
+            raise
+        except Exception as redis_error:
+            logger.warning(f"rate_limit_redis_error={redis_error}; falling back to memory window")
+
     now = time.time()
     with _rate_limit_lock:
         window = _rate_limit_window.setdefault(client_id, [])
@@ -296,18 +340,58 @@ def check_rate_limit(client_id: str) -> None:
         window.append(now)
 
 
+def _host_resolves_to_public_ip(host: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+
+    for info in infos:
+        ip_raw = info[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_raw)
+        except ValueError:
+            return False
+
+        if (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_multicast
+            or ip_obj.is_reserved
+            or ip_obj.is_unspecified
+        ):
+            logger.warning(f"Blocked potential SSRF attack: resolved IP {ip_obj} is not public.")
+            return False
+
+    return True
+
+
 def allowed_url(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return False
+
     host = parsed.hostname or ""
-    
-    # Strict SSRF Defense: Block private/local IP requests if pointing to local subnets
-    if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith(("192.168.", "10.", "172.16.", "172.31.")):
+    if not host:
+        return False
+
+    if not any(host == d or host.endswith(f".{d}") for d in settings.parsed_download_domains):
+        return False
+
+    if host in {"localhost", "127.0.0.1", "0.0.0.0"}:
         logger.warning(f"Blocked potential SSRF attack: host {host} requested.")
         return False
-        
-    return any(host == d or host.endswith(f".{d}") for d in settings.parsed_download_domains)
+
+    try:
+        parsed_ip = ipaddress.ip_address(host)
+        if parsed_ip.is_private or parsed_ip.is_loopback or parsed_ip.is_link_local or parsed_ip.is_reserved:
+            logger.warning(f"Blocked potential SSRF attack: direct IP host {host} is not public.")
+            return False
+    except ValueError:
+        pass
+
+    return _host_resolves_to_public_ip(host)
 
 
 def purge_old_jobs(db: Session) -> int:
@@ -333,6 +417,25 @@ def purge_old_jobs(db: Session) -> int:
         db.commit()
         logger.info(f"Startup purge complete: removed {count} expired jobs and S3 storage objects.")
     return count
+
+
+def _validate_media_file(path: str) -> None:
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nokey=1:noprint_wrappers=1", path]
+    probe = subprocess.run(cmd, capture_output=True, text=True)
+    if probe.returncode != 0:
+        raise HTTPException(status_code=400, detail="Invalid media file or codec")
+    try:
+        duration = float((probe.stdout or "0").strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unable to parse media duration")
+    if duration <= 0:
+        raise HTTPException(status_code=400, detail="Invalid media duration")
+    if duration > settings.MAX_AUDIO_DURATION_SECONDS:
+        raise HTTPException(status_code=413, detail="Audio duration exceeds plan limits")
+
+
+def _tenant_file_size_limit_mb(tenant_id: str) -> int:
+    return settings.parsed_tenant_max_file_mb.get(tenant_id, settings.MAX_FILE_MB)
 
 
 def format_timestamp(seconds: float, srt: bool = False) -> str:
@@ -369,6 +472,16 @@ def to_vtt(segments: list[dict]) -> str:
     return "\n".join(out)
 
 
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    correlation_id = request.headers.get("x-correlation-id") or str(uuid.uuid4())
+    request.state.correlation_id = correlation_id
+    METRICS["requests_total"] += 1
+    response = await call_next(request)
+    response.headers["x-correlation-id"] = correlation_id
+    return response
+
+
 # FastAPI Lifecycle Hooks
 @app.on_event("startup")
 def startup() -> None:
@@ -402,6 +515,11 @@ def readyz(db: Session = Depends(get_db)):
     return {"status": "ready"}
 
 
+@app.get("/metrics")
+def metrics():
+    return METRICS
+
+
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_audio_sync(
     request: Request,
@@ -425,8 +543,9 @@ async def transcribe_audio_sync(
     temp_path = ""
 
     if file:
-        if file.size and file.size > settings.MAX_FILE_MB * 1024 * 1024:
-            raise HTTPException(status_code=413, detail=f"File too large (max {settings.MAX_FILE_MB}MB)")
+        max_mb = _tenant_file_size_limit_mb(tenant_id)
+        if file.size and file.size > max_mb * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"File too large (max {max_mb}MB)")
 
         allowed_extensions = (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".opus", ".mp4", ".mpeg", ".webm")
         filename = file.filename or "audio"
@@ -437,11 +556,15 @@ async def transcribe_audio_sync(
         temp_path = os.path.join(settings.UPLOAD_DIR, f"{file_id}{ext}")
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        _validate_media_file(temp_path)
+        _validate_media_file(temp_path)
     else:
         if not allowed_url(url or ""):
             raise HTTPException(status_code=400, detail="URL domain is not allowed")
         temp_template = os.path.join(settings.UPLOAD_DIR, f"{file_id}.%(ext)s")
         temp_path = transcriber_service.download_from_url(url or "", temp_template)
+        _validate_media_file(temp_path)
+        _validate_media_file(temp_path)
 
     if not temp_path or not os.path.exists(temp_path):
         raise HTTPException(status_code=500, detail="Error retrieving audio file.")
@@ -488,6 +611,9 @@ async def transcribe_audio_job(
     s3_key = f"uploads/{tenant_id}/{job_id}"
 
     if file:
+        max_mb = _tenant_file_size_limit_mb(tenant_id)
+        if file.size and file.size > max_mb * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"File too large (max {max_mb}MB)")
         filename = file.filename or "audio"
         ext = os.path.splitext(filename)[1] or ".mp3"
         temp_path = os.path.join(settings.UPLOAD_DIR, f"temp_{job_id}{ext}")
@@ -495,11 +621,13 @@ async def transcribe_audio_job(
         
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        _validate_media_file(temp_path)
     else:
         if not allowed_url(url or ""):
             raise HTTPException(status_code=400, detail="URL domain is not allowed")
         temp_template = os.path.join(settings.UPLOAD_DIR, f"temp_{job_id}.%(ext)s")
         temp_path = transcriber_service.download_from_url(url or "", temp_template)
+        _validate_media_file(temp_path)
 
     if not temp_path or not os.path.exists(temp_path):
         raise HTTPException(status_code=500, detail="Error downloading input file.")
@@ -537,7 +665,8 @@ async def transcribe_audio_job(
 
     # 3. Offload processing task to Celery worker cluster
     transcribe_job_task.delay(job_id)
-    
+    METRICS["jobs_queued"] += 1
+
     return {"job_id": job_id, "status": "queued"}
 
 
@@ -653,24 +782,18 @@ def retry_job(job_id: str, tenant_id: str = Depends(get_tenant_id), db: Session 
     
     # Re-dispatch Celery background task
     transcribe_job_task.delay(job_id)
-    
+    METRICS["jobs_queued"] += 1
+
     return {"job_id": job_id, "status": "queued"}
 
 
 @app.post("/translate_text")
 async def translate_text_endpoint(req: TranslateRequest):
     try:
-        from deep_translator import GoogleTranslator
-
-        translator = GoogleTranslator(source="auto", target=req.target_language)
-
-        chunk_size = 4000
-        chunks = [req.text[i:i + chunk_size] for i in range(0, len(req.text), chunk_size)]
-        translated_chunks = [translator.translate(chunk) for chunk in chunks]
-
-        return {"translated_text": " ".join(translated_chunks)}
+        translated = translation_service.translate(req.text, req.target_language, source_language="auto")
+        return {"translated_text": translated}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.post("/summarize")
