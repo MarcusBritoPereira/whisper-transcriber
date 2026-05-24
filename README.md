@@ -12,6 +12,7 @@ Sistema de transcrição com FastAPI + Whisper + frontend Next.js.
 - Isolamento multi-tenant por chave de API nos endpoints de jobs.
 - Rate limiting por tenant+IP em memória.
 - Exclusão de job por tenant (`DELETE /jobs/{job_id}`).
+- Reprocessamento de job por tenant (`POST /jobs/{job_id}/retry`).
 - CORS configurável por variável de ambiente.
 - Whitelist de domínios para ingestão por URL.
 

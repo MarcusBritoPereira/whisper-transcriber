@@ -298,6 +298,27 @@ def process_job(job_id: str) -> None:
     # remove_local_file(row["input_path"])
 
 
+def retry_job_for_tenant(job_id: str, tenant_id: str) -> Optional[str]:
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT id, status FROM jobs WHERE id=? AND tenant_id=?",
+        (job_id, tenant_id),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    if row["status"] in {"queued", "processing"}:
+        conn.close()
+        return row["status"]
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status=?, updated_at=?, result_json=?, error=? WHERE id=? AND tenant_id=?",
+            ("queued", utc_now_iso(), None, None, job_id, tenant_id),
+        )
+    conn.close()
+    return "queued"
+
+
 def worker() -> None:
     logger.info("WORKER_THREAD_READY")
     while True:
@@ -538,6 +559,20 @@ def delete_job(job_id: str, x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=404, detail="Job not found")
     remove_local_file(input_path)
     return {"job_id": job_id, "deleted": True}
+
+
+@app.post("/jobs/{job_id}/retry")
+def retry_job(job_id: str, x_api_key: Optional[str] = Header(None)):
+    tenant_id = validate_api_key(x_api_key)
+    status = retry_job_for_tenant(job_id, tenant_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if status == "processing":
+        return {"job_id": job_id, "status": "processing"}
+    if status == "queued":
+        _job_queue.put(job_id)
+        return {"job_id": job_id, "status": "queued"}
+    return {"job_id": job_id, "status": status}
 
 
 @app.post("/translate_text")
