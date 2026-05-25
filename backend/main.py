@@ -105,7 +105,7 @@ def make_abacate_request(method: str, path: str, payload: dict = None) -> dict:
     data = json.dumps(payload).encode("utf-8") if payload else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("accept", "application/json")
-    req.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    req.add_header("User-Agent", "UPscribe-Backend/1.0")
     if data:
         req.add_header("content-type", "application/json")
     req.add_header("Authorization", f"Bearer {settings.ABACATE_API_KEY}")
@@ -770,6 +770,24 @@ async def handle_checkout(
     product_id = get_or_create_abacate_product()
     
     # 2. Create Hosted Checkout Session
+    customer_data = {}
+    name = f"{req.first_name or ''} {req.last_name or ''}".strip()
+    if name:
+        customer_data["name"] = name
+    if req.email:
+        customer_data["email"] = req.email
+    if req.document_number:
+        clean_doc = req.document_number.replace(".", "").replace("-", "").replace("/", "").strip()
+        if clean_doc:
+            customer_data["taxId"] = clean_doc
+    if req.phone:
+        clean_phone = req.phone.replace("(", "").replace(")", "").replace("-", "").replace(" ", "").strip()
+        if clean_phone:
+            customer_data["cellphone"] = clean_phone
+
+    import time
+    unique_ext_id = f"{tenant_id}_{int(time.time())}"
+    
     checkout_payload = {
         "items": [
             {
@@ -781,9 +799,17 @@ async def handle_checkout(
         "methods": ["PIX", "CARD"],
         "returnUrl": f"http://localhost:3000?status=success&tenant_id={tenant_id}",
         "completionUrl": f"http://localhost:3000?status=success&tenant_id={tenant_id}",
-        "externalId": tenant_id
+        "externalId": unique_ext_id
     }
-    
+
+    if customer_data:
+        # Create customer first to get customerId
+        cust_res = make_abacate_request("POST", "/customers/create", customer_data)
+        if cust_res and cust_res.get("success") and cust_res.get("data", {}).get("id"):
+            checkout_payload["customerId"] = cust_res["data"]["id"]
+        else:
+            logger.warning(f"Failed to create Abacate Pay customer. Proceeding without pre-fill. Res: {cust_res}")
+
     checkout_res = make_abacate_request("POST", "/checkouts/create", checkout_payload)
     if not checkout_res:
         raise HTTPException(status_code=502, detail="Sem resposta do Abacate Pay")

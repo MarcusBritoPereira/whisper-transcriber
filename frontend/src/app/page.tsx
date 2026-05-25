@@ -33,7 +33,11 @@ import {
   Edit2,
   FolderInput,
   Trash2,
-  FileText
+  FileText,
+  AudioLines,
+  User,
+  Shield,
+  X
 } from "lucide-react";
 import axios from "axios";
 
@@ -134,33 +138,48 @@ export default function HomePage() {
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutResult, setCheckoutResult] = useState<any>(null);
   const [pixTimer, setPixTimer] = useState<number>(600); // 10 minutes (600s) for Pix
+  const [expandedFaqs, setExpandedFaqs] = useState<number[]>([0, 1, 2, 3]); // Initial all open
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showSignupModal, setShowSignupModal] = useState(false);
 
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
   // Subscription Status check and payment redirection parameters
   React.useEffect(() => {
-    const checkSubscription = async () => {
-      try {
-        const response = await axios.get(`${apiBaseUrl}/api/v1/payments/subscription-status`);
-        setSubscriptionStatus(response.data.status);
-        setSubscriptionData(response.data);
-      } catch (err) {
-        console.error("Failed to check subscription status", err);
-        setSubscriptionStatus("inactive");
-      }
-    };
-    checkSubscription();
-
-    // Check for successful payment return URL parameters
+    let isSuccessRedirect = false;
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
       if (urlParams.get("status") === "success") {
+        isSuccessRedirect = true;
         setCheckoutStep("success");
         setShowUpgradeModal(true);
         setSubscriptionStatus("active");
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     }
+
+    const checkSubscription = async () => {
+      try {
+        const response = await axios.get(`${apiBaseUrl}/api/v1/payments/subscription-status`);
+        if (isSuccessRedirect) {
+          setSubscriptionStatus("active");
+          setSubscriptionData({
+            ...response.data,
+            status: "active",
+            plan_type: "annual"
+          });
+        } else {
+          setSubscriptionStatus(response.data.status);
+          setSubscriptionData(response.data);
+        }
+      } catch (err) {
+        console.error("Failed to check subscription status", err);
+        if (!isSuccessRedirect) {
+          setSubscriptionStatus("inactive");
+        }
+      }
+    };
+    checkSubscription();
   }, [apiBaseUrl]);
 
   const handleCancelSubscription = async () => {
@@ -532,78 +551,62 @@ export default function HomePage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#F8FAFC] flex flex-col items-center pt-20 pb-10 px-4 relative overflow-hidden font-sans">
-      {/* Background soft glow */}
-      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/3 w-[800px] h-[500px] bg-indigo-100/50 rounded-full blur-[100px] pointer-events-none" />
+    <div className="min-h-screen bg-[#F8FAFC] font-sans relative overflow-x-hidden">
+      {/* Top Background Glow (from mockup) */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-indigo-500/10 rounded-[100%] blur-[80px] pointer-events-none" />
 
-      {/* Premium Upgrade Banner */}
-      {subscriptionStatus !== "active" && (
-        <div className="w-full max-w-4xl bg-gradient-to-r from-amber-500 to-orange-600 text-white px-6 py-3 rounded-2xl flex items-center justify-between gap-4 mb-6 z-10 shadow-sm border border-orange-400/20">
-          <div className="flex items-center gap-3">
-            <Zap className="w-5 h-5 animate-pulse text-amber-200 shrink-0" />
-            <div className="text-left">
-              <p className="text-sm font-bold">Aproveite todo o poder da Inteligência Artificial!</p>
-              <p className="text-xs text-amber-100 font-medium">Assine o plano Premium por apenas R$ 150,00/ano e libere transcrições ilimitadas e speaker diarization.</p>
-            </div>
+      {/* Header */}
+      <header className="w-full flex items-center justify-between px-6 py-4 relative z-20">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => { setViewMode("transcribe"); setResult(null); }}>
+          <div className="w-8 h-8 bg-indigo-500 rounded-md flex items-center justify-center shadow-sm">
+            <Mic className="w-5 h-5 text-white" />
           </div>
-          <button 
-            onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }}
-            className="bg-white text-orange-700 hover:bg-amber-50 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm shrink-0"
-          >
-            Fazer Upgrade
-          </button>
+          <span className="text-xl font-bold text-gray-900 tracking-tight">UPscribe</span>
         </div>
-      )}
 
-      {/* Top Navigation / Tab menu */}
-      <div className="flex bg-white/80 backdrop-blur-md p-1 border border-gray-100 rounded-full mb-10 z-10 shadow-[0_4px_20px_rgba(0,0,0,0.02)]">
-      {viewMode === "transcribe" && (
-        <button
-          onClick={() => { setViewMode("transcribe"); setResult(null); }}
-          className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
-            viewMode === "transcribe" 
-              ? "bg-indigo-600 text-white shadow-sm" 
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <Mic className="w-3.5 h-3.5" />
-          Transcrever
-        </button>
-      )}
-      {viewMode !== "transcribe" && (
-        <button
-          onClick={() => { setViewMode("transcribe"); setResult(null); }}
-          className="flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 text-gray-500 hover:text-gray-700"
-        >
-          <Mic className="w-3.5 h-3.5" />
-          Transcrever
-        </button>
-      )}
-        <button
-          onClick={() => { setViewMode("history"); loadHistory(); }}
-          className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
-            viewMode === "history" 
-              ? "bg-indigo-600 text-white shadow-sm" 
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <Clock className="w-3.5 h-3.5" />
-          Histórico
-        </button>
-        {subscriptionStatus === "active" && (
-          <button
-            onClick={() => setViewMode("plan")}
-            className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold text-xs tracking-wider uppercase transition-all duration-200 ${
-              viewMode === "plan"
-                ? "bg-indigo-600 text-white shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            <Zap className="w-3.5 h-3.5" />
-            Meu Plano
-          </button>
+        <nav className="hidden md:flex items-center gap-8">
+          <button onClick={() => { setViewMode("transcribe"); setResult(null); }} className={`text-sm font-semibold transition-colors ${viewMode === 'transcribe' ? 'text-indigo-600' : 'text-gray-900 hover:text-indigo-600'}`}>Como funciona</button>
+          <button onClick={() => setViewMode("pricing")} className={`text-sm font-semibold transition-colors ${viewMode === 'pricing' ? 'text-indigo-600' : 'text-gray-600 hover:text-indigo-600'}`}>Preços</button>
+          <button onClick={() => setViewMode("faq")} className={`text-sm font-semibold transition-colors ${viewMode === 'faq' ? 'text-indigo-600' : 'text-gray-600 hover:text-indigo-600'}`}>Perguntas frequentes</button>
+        </nav>
+
+        <div className="flex items-center gap-3">
+          {subscriptionStatus === "active" ? (
+            <>
+              <button onClick={() => setViewMode("history")} className="text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors px-3 py-2">
+                Histórico
+              </button>
+              <button onClick={() => setViewMode("plan")} className="bg-gray-900 hover:bg-gray-800 text-white text-sm font-bold px-5 py-2.5 rounded-md transition-all shadow-sm">
+                Minha Conta
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setShowLoginModal(true)} className="text-sm font-bold text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 px-5 py-2.5 rounded-md transition-all shadow-sm">
+                Entrar
+              </button>
+              <button onClick={() => setShowSignupModal(true)} className="bg-gray-900 hover:bg-gray-800 text-white text-sm font-bold px-5 py-2.5 rounded-md transition-all shadow-sm">
+                Criar Conta
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+
+      <main className="flex flex-col items-center pt-16 pb-10 px-4 relative z-10 w-full max-w-5xl mx-auto">
+        
+        {/* Hero Section */}
+        {viewMode === "transcribe" && !isTranscribing && (
+          <div className="text-center mb-10 w-full animate-[fadeIn_0.3s_ease-out]">
+            <h1 className="text-[32px] md:text-[40px] font-bold text-gray-900 tracking-tight mb-4">
+              Transcreva seus áudios e vídeos online
+            </h1>
+            <p className="text-base text-gray-500 font-medium">
+              Transcreva com precisão em apenas alguns segundos.
+            </p>
+          </div>
         )}
-      </div>
+
 
       {viewMode === "transcribe" && (
         isTranscribing ? (
@@ -667,16 +670,6 @@ export default function HomePage() {
         </div>
       ) : !result ? (
         <>
-          {/* Header Container */}
-          <div className="text-center mb-10 z-10 w-full max-w-4xl px-4">
-        <h1 className="text-[28px] sm:text-[32px] md:text-[40px] leading-tight font-bold text-gray-900 mb-3 tracking-tight sm:whitespace-nowrap">
-          Transcreva seus áudios e vídeos online
-        </h1>
-        <p className="text-[15px] text-gray-500 font-medium">
-          Transcreva com precisão em apenas alguns segundos.
-        </p>
-      </div>
-
       {/* Tab Selector */}
       <div className="flex bg-gray-100/80 p-1.5 rounded-2xl mb-6 z-10">
         <button
@@ -1820,57 +1813,68 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* ── Meu Plano View ── */}
+      {/* ── Minha Conta View ── */}
       {viewMode === "plan" && (
-        <div className="w-full max-w-[540px] z-10 animate-[fadeIn_0.2s_ease-out]">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
-              <Zap className="w-5 h-5" />
+        <div className="w-full max-w-[540px] z-10 animate-[fadeIn_0.3s_ease-out]">
+          
+          <div className="flex items-center gap-5 mb-8 pb-6 border-b border-zinc-100">
+            <div className="w-16 h-16 bg-zinc-50 text-zinc-800 rounded-lg flex items-center justify-center font-bold text-xl border border-zinc-200">
+              M
             </div>
-            <div>
-              <h2 className="text-lg font-black text-gray-900">Meu Plano</h2>
-              <p className="text-xs text-gray-500 font-medium">Gerencie sua assinatura Premium</p>
+            <div className="flex-1">
+              <h2 className="text-xl font-bold text-zinc-900 tracking-tight">Minha Conta</h2>
+              <p className="text-xs text-zinc-500 font-medium">mapatechltda@gmail.com</p>
             </div>
+            <button className="text-[10px] font-bold text-zinc-600 hover:text-zinc-900 border border-zinc-200 hover:bg-zinc-50 transition-colors uppercase tracking-widest px-4 py-2 rounded-md">
+              Editar Perfil
+            </button>
           </div>
 
-          <div className="bg-white border border-gray-100 rounded-3xl shadow-[0_8px_30px_rgba(0,0,0,0.04)] p-6 mb-4">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-black text-gray-900">Premium Anual</span>
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                  subscriptionData?.status === "active" ? "bg-green-100 text-green-700"
-                  : subscriptionData?.status === "cancelled" ? "bg-red-100 text-red-600"
-                  : "bg-gray-100 text-gray-500"
+          {/* Plano Card */}
+          <div className="bg-white border border-zinc-100 rounded-xl p-7 mb-5 shadow-[0_12px_40px_rgba(0,0,0,0.03)]">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-1.5 bg-orange-50 rounded-md">
+                <Zap className="w-4 h-4 text-orange-500" />
+              </div>
+              <h3 className="text-xs font-bold text-zinc-800 uppercase tracking-widest">Assinatura</h3>
+            </div>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <span className="text-base font-bold text-zinc-900 tracking-tight">Premium Anual</span>
+                <span className={`px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest rounded-md ${
+                  subscriptionData?.status === "active" ? "bg-green-50 text-green-600 border border-green-100"
+                  : subscriptionData?.status === "cancelled" ? "bg-red-50 text-red-600 border border-red-100"
+                  : "bg-zinc-50 text-zinc-500 border border-zinc-200"
                 }`}>
-                  {subscriptionData?.status === "active" ? "● Ativo" : subscriptionData?.status === "cancelled" ? "Cancelado" : "Inativo"}
+                  {subscriptionData?.status === "active" ? "Ativo" : subscriptionData?.status === "cancelled" ? "Cancelado" : "Inativo"}
                 </span>
               </div>
-              <span className="text-xs font-bold text-indigo-600">R$ 150,00 / ano</span>
+              <span className="text-sm font-semibold text-zinc-500">R$ 150,00 <span className="text-xs font-normal">/ ano</span></span>
             </div>
-            <div className="space-y-3 border-t border-gray-100 pt-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-500 font-medium">Válido até</span>
-                <span className="text-gray-900 font-bold">{subscriptionData?.expires_at ? formatDate(subscriptionData.expires_at) : "—"}</span>
+            <div className="space-y-4 pt-5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-400 font-medium tracking-wide">Válido até</span>
+                <span className="text-zinc-800 font-medium">{subscriptionData?.expires_at ? formatDate(subscriptionData.expires_at) : "—"}</span>
               </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-500 font-medium">Criado em</span>
-                <span className="text-gray-700 font-semibold">{subscriptionData?.created_at ? formatDate(subscriptionData.created_at) : "—"}</span>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-400 font-medium tracking-wide">Criado em</span>
+                <span className="text-zinc-800 font-medium">{subscriptionData?.created_at ? formatDate(subscriptionData.created_at) : "—"}</span>
               </div>
               {subscriptionData?.last_order_id && (
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-500 font-medium">Pedido</span>
-                  <span className="text-gray-500 font-mono text-xs truncate max-w-[180px]">{subscriptionData.last_order_id}</span>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-400 font-medium tracking-wide">Pedido</span>
+                  <span className="text-zinc-800 font-mono text-[10px] truncate max-w-[180px] px-2 py-1 bg-zinc-50 rounded-md border border-zinc-100">{subscriptionData.last_order_id}</span>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="bg-indigo-50/40 border border-indigo-100 rounded-2xl p-5 mb-4">
-            <p className="text-xs font-bold text-indigo-700 mb-3 uppercase tracking-wider">Incluído no seu plano</p>
-            <div className="space-y-2">
+          <div className="bg-zinc-50/50 border border-zinc-100 rounded-xl p-6 mb-5">
+            <p className="text-[10px] font-bold text-zinc-400 mb-4 uppercase tracking-widest">Incluído no seu plano</p>
+            <div className="space-y-3">
               {["Transcrições ilimitadas", "Reconhecimento de falantes", "Tradução simultânea", "Restauração de áudio", "Suporte premium"].map(f => (
-                <div key={f} className="flex items-center gap-2 text-xs text-gray-700 font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                <div key={f} className="flex items-center gap-3 text-xs font-medium text-zinc-600">
+                  <div className="w-1 h-1 bg-orange-400 rounded-full" />
                   {f}
                 </div>
               ))}
@@ -1880,20 +1884,176 @@ export default function HomePage() {
           {subscriptionData?.status === "active" && (
             <button
               onClick={() => { setShowCancelModal(true); setCancelStep("confirm"); setCancelError(null); }}
-              className="w-full py-3 border border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300 font-semibold text-xs rounded-xl transition-all"
+              className="w-full py-3.5 border border-red-200 bg-transparent text-red-500 hover:bg-red-50 text-[11px] font-bold tracking-widest uppercase transition-all rounded-lg"
             >
               Cancelar assinatura
             </button>
           )}
 
           {subscriptionData?.status === "cancelled" && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
-              <p className="text-xs text-amber-800 font-semibold mb-3">Sua assinatura foi cancelada. Você ainda tem acesso até a data de expiração.</p>
-              <button onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }} className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all">
+            <div className="bg-white border border-zinc-200 rounded-xl p-6 text-center shadow-[0_8px_30px_rgb(0,0,0,0.02)]">
+              <p className="text-xs text-zinc-500 font-medium mb-5">Sua assinatura foi cancelada, mas você mantém o acesso até a data de expiração.</p>
+              <button onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }} className="w-full px-4 py-3 bg-zinc-900 text-white hover:bg-zinc-800 text-[11px] font-bold uppercase tracking-widest transition-all rounded-lg shadow-sm">
                 Reativar Plano
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Pricing View ── */}
+      {viewMode === "pricing" && (
+        <div className="w-full max-w-4xl z-10 animate-[fadeIn_0.3s_ease-out] flex flex-col items-center">
+          <div className="text-center mb-8">
+            <h1 className="text-[32px] md:text-[40px] font-bold text-gray-900 tracking-tight mb-2">
+              Inicie sua assinatura do UPscribe
+            </h1>
+            <p className="text-base text-gray-500 font-medium">
+              Converta áudio e vídeo em texto em segundos com a mais alta qualidade.
+            </p>
+          </div>
+
+
+          {/* Pricing Card */}
+          <div className="w-full max-w-2xl bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 p-8 md:p-10 mb-16">
+            <div className="flex flex-col md:flex-row items-center justify-center gap-8 md:gap-16 mb-8">
+              <div className="text-center">
+                <p className="text-sm font-bold text-gray-900 mb-2">Hoje</p>
+                <h2 className="text-4xl md:text-5xl font-bold text-gray-900 tracking-tight mb-2">R$ 5,00</h2>
+                <p className="text-xs text-gray-500 font-medium">Teste gratuito de 7 dias</p>
+              </div>
+              <div className="hidden md:block w-px h-24 bg-gray-100"></div>
+              <div className="text-center">
+                <p className="text-sm font-bold text-gray-900 mb-2">Então</p>
+                <h2 className="text-4xl md:text-5xl font-bold text-gray-900 tracking-tight mb-2">R$ 150,00</h2>
+                <p className="text-xs text-gray-500 font-medium">anual</p>
+              </div>
+            </div>
+
+            <div className="bg-[#F8FAFC] rounded-2xl p-6 mb-8 text-center">
+              <p className="text-xs text-gray-500 leading-relaxed font-medium">
+                Ao ativar seu teste de 7 dias por <strong className="text-gray-700">R$ 5,00</strong>, você inicia uma <strong className="text-gray-700">assinatura anual recorrente</strong>. Após o término do período de teste, a taxa padrão de <strong className="text-gray-700">R$ 150,00</strong> será cobrada automaticamente todos os anos. Você pode cancelar a qualquer momento pelo seu painel de controle. Para evitar a cobrança de <strong className="text-gray-700">R$ 150,00</strong>, você deve cancelar pelo menos <strong className="text-gray-700">1 hora</strong> antes do término do período de teste.
+              </p>
+            </div>
+
+            <div className="flex flex-col items-center">
+              <button onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }} className="w-full max-w-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-lg transition-all shadow-sm text-sm mb-4">
+                Comece o teste gratuito em 7 dias.
+              </button>
+              <p className="text-xs text-gray-500 font-medium">Cancele a qualquer momento.</p>
+            </div>
+          </div>
+
+          {/* Features Table */}
+          <div className="w-full mb-20">
+            <h2 className="text-2xl font-bold text-gray-900 mb-8">Funcionalidades e condições da assinatura:</h2>
+            
+            <div className="w-full overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[600px]">
+                <thead>
+                  <tr className="border-b-2 border-gray-200">
+                    <th className="py-4 px-2 text-sm font-bold text-gray-900 w-1/2">Funções principais</th>
+                    <th className="py-4 px-2 text-sm font-bold text-gray-900 w-1/4 text-center border-l border-gray-100">Teste de 7 dias</th>
+                    <th className="py-4 px-2 text-sm font-bold text-gray-900 w-1/4 text-center border-l border-gray-100">Assinatura anual</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm">
+                  {[
+                    { label: "Preço e renovação", trial: "R$ 5,00 (Renovação por R$ 150,00/ano)", sub: "R$ 150,00 por ano" },
+                    { label: "Envio de arquivo", trial: "Máximo de 5 arquivos por dia", sub: "Ilimitado" },
+                    { label: "Tamanho máximo do arquivo", trial: "Até 2 GB", sub: "Até 5 GB" },
+                    { label: "Armazenar", trial: "Apenas por 24 horas.", sub: "Durante 7 dias" },
+                    { label: "Organização em pastas", trial: "Não incluído", sub: "Incluído" },
+                    { label: "Colaboradores", trial: "Não incluído", sub: "Acesso para toda a equipe" },
+                    { label: "Mais de 99 idiomas disponíveis", trial: true, sub: true },
+                    { label: "Faça o download em DOCX, PDF, TXT ou SRT.", trial: true, sub: true },
+                    { label: "Envio de arquivos em massa", trial: true, sub: true },
+                    { label: "Edição de transcrição", trial: true, sub: true },
+                    { label: "Carimbos de data/hora opcionais", trial: true, sub: true },
+                    { label: "Identificação do falante", trial: true, sub: true },
+                    { label: "Resumo da transcrição", trial: true, sub: true },
+                  ].map((row, idx) => (
+                    <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
+                      <td className="py-4 px-2 font-medium text-gray-600">{row.label}</td>
+                      <td className="py-4 px-2 text-center border-l border-gray-100">
+                        {typeof row.trial === "boolean" ? (
+                          row.trial ? <div className="flex justify-center"><div className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center"><Check className="w-3 h-3 text-white" /></div></div> : <span className="text-gray-400">—</span>
+                        ) : (
+                          <span className="text-xs font-semibold text-gray-500">{row.trial}</span>
+                        )}
+                      </td>
+                      <td className="py-4 px-2 text-center border-l border-gray-100">
+                        {typeof row.sub === "boolean" ? (
+                          row.sub ? <div className="flex justify-center"><div className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center"><Check className="w-3 h-3 text-white" /></div></div> : <span className="text-gray-400">—</span>
+                        ) : (
+                          <span className="text-xs font-semibold text-gray-500">{row.sub}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── FAQ View ── */}
+      {viewMode === "faq" && (
+        <div className="w-full max-w-3xl z-10 animate-[fadeIn_0.3s_ease-out] mb-20">
+          <h1 className="text-[32px] md:text-[40px] font-bold text-gray-900 tracking-tight mb-12">
+            Perguntas frequentes
+          </h1>
+
+          <div className="space-y-6">
+            {[
+              { 
+                q: "O que acontece exatamente ao final do meu período de teste de 7 dias?", 
+                a: "O período de teste custa R$ 5,00 e dura 7 dias corridos. \n\nIMPORTANTE: Se você não cancelar sua assinatura antes do final desse período, sua conta será renovada automaticamente para o plano anual padrão. A partir do oitavo dia, será cobrada automaticamente a taxa de R$ 150,00 por ano até que você cancele nas configurações da sua conta." 
+              },
+              { 
+                q: "Quais são as limitações reais do período de teste de 7 dias?", 
+                a: "Durante o período de teste de 7 dias, você pode realizar até 5 transcrições por dia e enviar arquivos com tamanho máximo de 2 GB. Os arquivos que você editar ou criar ficarão armazenados em nossos servidores por apenas 24 horas. Durante esse período, a opção de organizar seus arquivos em pastas ou adicionar colaboradores à sua conta não estará disponível." 
+              },
+              { 
+                q: "Quando devo cancelar para evitar a cobrança da taxa de assinatura anual?", 
+                a: "Para evitar a cobrança automática de R$ 150,00, você deve cancelar pelo menos 1 hora antes do término do seu período de teste de 7 dias. Você pode cancelar facilmente a qualquer momento na seção Minha Conta do seu painel de usuário." 
+              },
+              { 
+                q: "Posso solicitar um reembolso se perdi o prazo de cancelamento?", 
+                a: "Não oferecemos reembolsos automáticos caso você esqueça de cancelar. Por favor, gerencie sua assinatura ativamente." 
+              }
+            ].map((faq, idx) => {
+              const isOpen = expandedFaqs.includes(idx);
+              const toggleFaq = () => {
+                if (isOpen) {
+                  setExpandedFaqs(expandedFaqs.filter(i => i !== idx));
+                } else {
+                  setExpandedFaqs([...expandedFaqs, idx]);
+                }
+              };
+              
+              return (
+              <div key={idx} className="border-b border-gray-200 pb-6">
+                <div className="flex items-start gap-4 cursor-pointer" onClick={toggleFaq}>
+                  <div className="mt-1 text-indigo-600 font-bold text-xl select-none w-6 text-center">
+                    {isOpen ? "—" : "+"}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex justify-between items-start mb-3">
+                      <h3 className="text-lg font-medium text-indigo-600 max-w-[90%]">{faq.q}</h3>
+                      <span className="text-xs text-indigo-600 font-bold pt-1">({idx + 1})</span>
+                    </div>
+                    {isOpen && (
+                      <p className="text-sm text-gray-600 leading-relaxed font-medium whitespace-pre-wrap animate-[fadeIn_0.2s_ease-out]">
+                        {faq.a}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )})}
+          </div>
         </div>
       )}
 
@@ -1953,6 +2113,237 @@ export default function HomePage() {
           </div>
         </div>
       )}
-    </main>
+
+      {/* ── 3 Simple Steps Section ── */}
+      {viewMode === "transcribe" && !result && !isTranscribing && (
+        <section className="w-full max-w-5xl mt-24 mb-16 animate-[fadeIn_0.5s_ease-out]">
+          <div className="text-center mb-12">
+            <h2 className="text-2xl md:text-3xl font-bold text-gray-900">
+              Transcrições precisas em 3 passos simples
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+            {/* Step 1 */}
+            <div className="bg-white rounded-3xl p-8 flex flex-col items-center text-center shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100">
+              <div className="w-24 h-24 mb-6 relative flex items-center justify-center">
+                <div className="absolute inset-0 bg-indigo-50 rounded-full scale-110"></div>
+                <CloudUpload className="w-10 h-10 text-indigo-500 relative z-10" />
+                <div className="absolute top-2 right-2 w-6 h-6 bg-indigo-200/50 rounded-full"></div>
+              </div>
+              <p className="text-[10px] font-bold text-indigo-500 tracking-widest uppercase mb-4">Passo 1</p>
+              <h3 className="text-lg font-bold text-gray-900 mb-3">Faça upload do seu arquivo ou URL</h3>
+              <p className="text-sm text-gray-500 font-medium leading-relaxed">
+                Selecione um arquivo ou cole o link do seu áudio ou vídeo e escolha o idioma do áudio.
+              </p>
+            </div>
+
+            {/* Step 2 */}
+            <div className="bg-white rounded-3xl p-8 flex flex-col items-center text-center shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100">
+              <div className="w-24 h-24 mb-6 relative flex items-center justify-center">
+                <div className="absolute inset-0 bg-indigo-50 rounded-full scale-110"></div>
+                <AudioLines className="w-10 h-10 text-indigo-500 relative z-10" />
+                <div className="absolute bottom-2 left-2 w-5 h-5 bg-indigo-200/50 rounded-full"></div>
+              </div>
+              <p className="text-[10px] font-bold text-indigo-500 tracking-widest uppercase mb-4">Passo 2</p>
+              <h3 className="text-lg font-bold text-indigo-600 mb-3">Nós processamos seu conteúdo</h3>
+              <p className="text-sm text-indigo-600/80 font-medium leading-relaxed">
+                Convertemos automaticamente o conteúdo em texto com alta precisão.
+              </p>
+            </div>
+
+            {/* Step 3 */}
+            <div className="bg-white rounded-3xl p-8 flex flex-col items-center text-center shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100">
+              <div className="w-24 h-24 mb-6 relative flex items-center justify-center">
+                <div className="absolute inset-0 bg-indigo-50 rounded-full scale-110"></div>
+                <FileText className="w-10 h-10 text-indigo-500 relative z-10" />
+                <div className="absolute top-4 left-2 w-4 h-4 bg-indigo-200/50 rounded-full"></div>
+              </div>
+              <p className="text-[10px] font-bold text-indigo-500 tracking-widest uppercase mb-4">Passo 3</p>
+              <h3 className="text-lg font-bold text-gray-900 mb-3">Ative sua conta para baixar</h3>
+              <p className="text-sm text-gray-500 font-medium leading-relaxed">
+                Cadastre-se e pague para se tornar Premium e ter acesso ilimitado para baixar e visualizar seus arquivos e resumos.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-center">
+            <button 
+              onClick={() => { setViewMode("transcribe"); window.scrollTo({top: 0, behavior: 'smooth'}); }}
+              className="bg-gray-900 hover:bg-gray-800 text-white font-bold py-3 px-8 rounded-lg transition-all shadow-sm text-sm"
+            >
+              Fazer upload
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* ── Login Modal ── */}
+      {showLoginModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-white w-full max-w-[420px] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col">
+            
+            {/* Header */}
+            <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
+              <h3 className="text-sm font-bold text-gray-900">Entrar</h3>
+              <button onClick={() => setShowLoginModal(false)} className="text-indigo-500 hover:text-indigo-700 p-1 rounded-full hover:bg-indigo-50 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-8 pt-8 pb-10">
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Bem-vindo(a) de volta!</h2>
+              <p className="text-sm text-gray-500 font-medium mb-8">
+                Entre com suas redes sociais ou complete seus dados.
+              </p>
+
+              {/* Form */}
+              <div className="space-y-4 mb-6">
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <User className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <input 
+                    type="email" 
+                    placeholder="nome@email.com" 
+                    className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
+                  />
+                </div>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <Shield className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <input 
+                    type="password" 
+                    placeholder="Insira sua senha aqui" 
+                    className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="text-center mb-6">
+                <span className="text-xs text-gray-600 font-medium">Esqueceu sua senha? </span>
+                <a href="#" className="text-xs text-indigo-600 font-medium hover:underline">Clique aqui</a>
+              </div>
+
+              <button className="w-full bg-gray-100 text-gray-400 font-bold py-3.5 rounded-xl transition-all text-sm mb-6 cursor-not-allowed">
+                Entrar
+              </button>
+
+              <div className="flex items-center justify-center gap-4 mb-6">
+                <div className="flex-1 h-px bg-gray-200"></div>
+                <span className="text-xs text-gray-900 font-bold">ou</span>
+                <div className="flex-1 h-px bg-gray-200"></div>
+              </div>
+
+              <button className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-8 shadow-sm">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                </svg>
+                Entrar com o Google
+              </button>
+
+              <div className="text-center">
+                <span className="text-xs text-gray-900 font-medium">Você não tem uma conta? </span>
+                <a href="#" className="text-xs text-indigo-500 font-medium hover:underline">Crie uma conta</a>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Sign Up Modal ── */}
+      {showSignupModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-white w-full max-w-[420px] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col">
+            
+            {/* Header */}
+            <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
+              <h3 className="text-sm font-bold text-gray-900">Criar Conta</h3>
+              <button onClick={() => setShowSignupModal(false)} className="text-indigo-500 hover:text-indigo-700 p-1 rounded-full hover:bg-indigo-50 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-8 pt-8 pb-10">
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Comece com o teste de 7 dias</h2>
+              <p className="text-sm text-gray-500 font-medium mb-8">
+                Crie sua conta com suas redes sociais ou e-mail.
+              </p>
+
+              {/* Form */}
+              <div className="space-y-4 mb-4">
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <User className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <input 
+                    type="email" 
+                    placeholder="nome@email.com" 
+                    className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
+                  />
+                </div>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <Shield className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <input 
+                    type="password" 
+                    placeholder="Insira sua senha aqui" 
+                    className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
+                  />
+                </div>
+              </div>
+
+              {/* Password Strength Indicator */}
+              <div className="flex items-center gap-1.5 mb-6">
+                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
+                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
+                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
+                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
+              </div>
+
+              <button className="w-full bg-gray-100 text-gray-400 font-bold py-3.5 rounded-xl transition-all text-sm mb-6 cursor-not-allowed">
+                Criar uma conta
+              </button>
+
+              <div className="flex items-center justify-center gap-4 mb-6">
+                <div className="flex-1 h-px bg-gray-200"></div>
+                <span className="text-xs text-gray-900 font-bold">ou</span>
+                <div className="flex-1 h-px bg-gray-200"></div>
+              </div>
+
+              <button className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-6 shadow-sm">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                </svg>
+                Criar conta com o Google
+              </button>
+
+              <div className="text-center mb-6">
+                <span className="text-xs text-gray-900 font-medium">Eu já tenho uma conta </span>
+                <button onClick={() => { setShowSignupModal(false); setShowLoginModal(true); }} className="text-xs text-indigo-500 font-medium hover:underline">Entrar</button>
+              </div>
+
+              <div className="text-center mt-2 border-t border-gray-100 pt-6">
+                <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
+                  Ao criar uma conta, você reconhece que leu e concorda com os <a href="#" className="font-bold text-gray-700 hover:text-indigo-600">Termos de Uso e Contrato</a> e a <a href="#" className="font-bold text-gray-700 hover:text-indigo-600">Política de Privacidade</a>.
+                </p>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      </main>
+    </div>
   );
 }
