@@ -187,6 +187,7 @@ export default function HomePage() {
 
   // Modal Upload Dialog Trigger
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [activeMenuJobId, setActiveMenuJobId] = useState<string | null>(null);
 
   // Configurações Gerais Sub-Tabs & Detailed Inputs
   const [settingsSubTab, setSettingsSubTab] = useState<"gerais" | "fiscais">("gerais");
@@ -1229,6 +1230,55 @@ export default function HomePage() {
     setIsMenuOpen(false);
   };
 
+  const handleExportJob = async (jobId: string, filename: string) => {
+    try {
+      const res = await axios.get(`${apiBaseUrl}/jobs/${jobId}/result?format=json`);
+      const content = res.data.text;
+      const textBlob = new Blob([content], { type: "text/plain" });
+      const blobUrl = URL.createObjectURL(textBlob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `transcricao_${filename || 'audio'}.txt`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+      setActiveMenuJobId(null);
+    } catch (err) {
+      alert("Erro ao exportar a transcrição.");
+    }
+  };
+
+  const handleCopyJobText = async (jobId: string) => {
+    try {
+      const res = await axios.get(`${apiBaseUrl}/jobs/${jobId}/result?format=json`);
+      navigator.clipboard.writeText(res.data.text);
+      alert("Texto copiado para a área de transferência!");
+      setActiveMenuJobId(null);
+    } catch (err) {
+      alert("Erro ao copiar o texto.");
+    }
+  };
+
+  const handleDownloadJobAudio = (jobId: string) => {
+    const url = `${apiBaseUrl}/jobs/${jobId}/audio`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `audio_${jobId}.mp3`;
+    a.click();
+    setActiveMenuJobId(null);
+  };
+
+  const handleDeleteJobHistory = async (jobId: string) => {
+    if (!confirm("Tem certeza de que deseja excluir permanentemente esta transcrição?")) return;
+    try {
+      await axios.delete(`${apiBaseUrl}/jobs/${jobId}`);
+      await loadHistory();
+      setActiveMenuJobId(null);
+    } catch (err) {
+      console.error("Failed to delete job", err);
+      alert("Erro ao excluir transcrição.");
+    }
+  };
+
   if (user) {
     return (
       <div className="min-h-screen bg-[#F9FAFB] flex relative font-sans text-gray-900 overflow-x-hidden">
@@ -1771,6 +1821,47 @@ export default function HomePage() {
                               }`}>
                                 {job.status === "completed" ? "Concluído" : job.status === "failed" ? "Falhou" : "Na fila"}
                               </span>
+
+                              {/* 3-dot Actions Dropdown Menu */}
+                              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                                <button 
+                                  onClick={() => setActiveMenuJobId(activeMenuJobId === job.job_id ? null : job.job_id)}
+                                  className="w-8 h-8 flex items-center justify-center text-gray-500 bg-gray-50 border border-gray-100 cursor-pointer hover:bg-gray-100 hover:text-indigo-600 transition-colors rounded-[8px]"
+                                >
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </button>
+                                
+                                {activeMenuJobId === job.job_id && (
+                                  <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-100 rounded-xl shadow-lg py-1.5 z-30 animate-[fadeIn_0.15s_ease-out]">
+                                    <button 
+                                      onClick={() => handleExportJob(job.job_id, job.filename)} 
+                                      disabled={job.status !== "completed"}
+                                      className="w-full px-4 py-2 text-left text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                      <Download className="w-3.5 h-3.5" /> Exportar TXT
+                                    </button>
+                                    <button 
+                                      onClick={() => handleCopyJobText(job.job_id)} 
+                                      disabled={job.status !== "completed"}
+                                      className="w-full px-4 py-2 text-left text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                      <Copy className="w-3.5 h-3.5" /> Copiar texto
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDownloadJobAudio(job.job_id)} 
+                                      className="w-full px-4 py-2 text-left text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-2 cursor-pointer"
+                                    >
+                                      <Volume2 className="w-3.5 h-3.5" /> Baixar áudio
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDeleteJobHistory(job.job_id)} 
+                                      className="w-full px-4 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 flex items-center gap-2 border-t border-gray-50 cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" /> Excluir
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
                         ))}
