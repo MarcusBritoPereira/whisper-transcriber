@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = "sua_resend_api_key"
     EMAIL_FROM_NAME: str = "UPscribe"
     APP_URL: str = "http://localhost:3000"
+
+    # Supabase Auth Config
+    SUPABASE_URL: str = "https://fguzflipajadlcsdzvfv.supabase.co"
+    SUPABASE_ANON_KEY: str = "sb_publishable_9WzcF7XXdZMQA0KF7VSxcA_xIczCiah"
+    SUPABASE_JWT_SECRET: str = "zbNK6OpTJP3D3864azuyBPFtTkZM6k5zYXW4irz5hBGoH1wyhQjDPc1cuiHZy6vh1QygZtJRtyvQnW7KYv3GNQ=="
     
     class Config:
         env_file = ".env"

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
+import { createClient } from "../utils/supabase/client";
 import { 
   CloudUpload, 
   Link as LinkIcon, 
@@ -18,6 +19,8 @@ import {
   Link2,
   Check,
   ArrowLeft,
+  MoreHorizontal,
+  Copy,
   FileAudio,
   Play,
   Pause,
@@ -31,13 +34,19 @@ import {
   Share2,
   Download,
   Edit2,
+  Folder,
+  FolderPlus,
   FolderInput,
   Trash2,
   FileText,
   AudioLines,
   User,
   Shield,
-  X
+  X,
+  CreditCard,
+  Users,
+  HelpCircle,
+  LogOut
 } from "lucide-react";
 import axios from "axios";
 
@@ -77,6 +86,7 @@ export default function HomePage() {
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<string | null>(null);
+  const [transcriptionProgress, setTranscriptionProgress] = useState(0);
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showTimestamps, setShowTimestamps] = useState(true);
@@ -99,9 +109,18 @@ export default function HomePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
-  const [viewMode, setViewMode] = useState<"transcribe" | "history" | "plan">("transcribe");
+  const [viewMode, setViewMode] = useState<"transcribe" | "history" | "plan" | "pricing" | "faq">("transcribe");
   const [historyJobs, setHistoryJobs] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Folders State
+  const [folders, setFolders] = useState<any[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string>("all"); // "all", "root", or specific folder ID
+  const [selectedFolderUploadId, setSelectedFolderUploadId] = useState<string>(""); // folder ID to upload to
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [isLoadingFolders, setIsLoadingFolders] = useState(false);
 
   // Payment & Subscription States
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("inactive");
@@ -135,12 +154,133 @@ export default function HomePage() {
     installments: 1
   });
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [isInstantCheckingOut, setIsInstantCheckingOut] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutResult, setCheckoutResult] = useState<any>(null);
   const [pixTimer, setPixTimer] = useState<number>(600); // 10 minutes (600s) for Pix
   const [expandedFaqs, setExpandedFaqs] = useState<number[]>([0, 1, 2, 3]); // Initial all open
   const [showLoginModal, setShowLoginModal] = useState(false);
-  const [showSignupModal, setShowSignupModal] = useState(false);
+  const [showSignupModal, setShowSignupModal] = useState<boolean>(false);
+  const [user, setUser] = useState<any>(null);
+
+  // New SaaS Modules & Tab Navigation State
+  const [activeTab, setActiveTab] = useState<"transcriptions" | "billing" | "users" | "settings" | "contact">("transcriptions");
+  const [workspaceName, setWorkspaceName] = useState("Meu Workspace");
+  const [workspaceMembers, setWorkspaceMembers] = useState<any[]>([]);
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [isInvitingMember, setIsInvitingMember] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  // Profile Edit & Workspace Naming
+  const [profileName, setProfileName] = useState("");
+  const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+
+  // Support Form
+  const [supportSubject, setSupportSubject] = useState("");
+  const [supportMessage, setSupportMessage] = useState("");
+  const [isSendingSupport, setIsSendingSupport] = useState(false);
+  const [supportSuccess, setSupportSuccess] = useState<string | null>(null);
+
+  // Modal Upload Dialog Trigger
+  const [showUploadModal, setShowUploadModal] = useState(false);
+
+  // Configurações Gerais Sub-Tabs & Detailed Inputs
+  const [settingsSubTab, setSettingsSubTab] = useState<"gerais" | "fiscais">("gerais");
+  const [profileFirstName, setProfileFirstName] = useState("Marcus");
+  const [profileLastName, setProfileLastName] = useState("Pereira");
+  const [profilePhoneArea, setProfilePhoneArea] = useState("34");
+  const [profilePhoneNumber, setProfilePhoneNumber] = useState("6555123");
+  const [profilePassword, setProfilePassword] = useState("********");
+  const [profileLanguage, setProfileLanguage] = useState("pt");
+  const [profileTimezone, setProfileTimezone] = useState("GMT+01:00");
+  const [profileDateFormat, setProfileDateFormat] = useState("DD-MM-AAAA");
+  const [profileTimeFormat, setProfileTimeFormat] = useState("24");
+
+  // Configurações Fiscais detailed inputs
+  const [fiscalType, setFiscalType] = useState<"empresa" | "privado">("empresa");
+  const [fiscalCompanyName, setFiscalCompanyName] = useState("");
+  const [fiscalCountry, setFiscalCountry] = useState("Brasil");
+  const [fiscalNif, setFiscalNif] = useState("");
+  const [fiscalFirstName, setFiscalFirstName] = useState("");
+  const [fiscalLastName, setFiscalLastName] = useState("");
+  const [fiscalAddress, setFiscalAddress] = useState("");
+  const [fiscalPostalCode, setFiscalPostalCode] = useState("");
+  const [fiscalCity, setFiscalCity] = useState("");
+  const [fiscalEmail, setFiscalEmail] = useState("");
+
+  const supabase = createClient();
+
+  const handleGoogleLogin = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+  };
+
+  React.useEffect(() => {
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    // Add Axios interceptor for Authentication
+    const requestInterceptor = axios.interceptors.request.use(async (config) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        config.headers.Authorization = `Bearer ${session.access_token}`;
+      }
+      return config;
+    });
+
+    // Add Axios interceptor for handling expired/invalid sessions (401)
+    const responseInterceptor = axios.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        if (error.response?.status === 401) {
+          console.warn("Session expired or invalid, signing out and clearing storage...");
+          try {
+            await supabase.auth.signOut();
+          } catch (e) {
+            // ignore
+          }
+          if (typeof window !== "undefined") {
+            try {
+              // Clear any local storage keys related to supabase auth
+              for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && (key.startsWith("sb-") || key.includes("supabase"))) {
+                  localStorage.removeItem(key);
+                }
+              }
+            } catch (e) {
+              // ignore
+            }
+            setUser(null);
+            // Instantly reload to a clean logged-out homepage
+            window.location.reload();
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      subscription.unsubscribe();
+      axios.interceptors.request.eject(requestInterceptor);
+      axios.interceptors.response.eject(responseInterceptor);
+    };
+  }, [supabase]);
 
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -159,6 +299,7 @@ export default function HomePage() {
     }
 
     const checkSubscription = async () => {
+      if (!user) return;
       try {
         const response = await axios.get(`${apiBaseUrl}/api/v1/payments/subscription-status`);
         if (isSuccessRedirect) {
@@ -179,8 +320,14 @@ export default function HomePage() {
         }
       }
     };
-    checkSubscription();
-  }, [apiBaseUrl]);
+    
+    if (user) {
+      checkSubscription();
+    } else {
+      setSubscriptionStatus("inactive");
+      setSubscriptionData(null);
+    }
+  }, [apiBaseUrl, user]);
 
   const handleCancelSubscription = async () => {
     setIsCancelling(true);
@@ -209,6 +356,197 @@ export default function HomePage() {
     } catch { return "—"; }
   };
 
+  const formatPortugueseDate = (iso: string | null) => {
+    if (!iso) return "24 De Maio De 2026";
+    try {
+      const d = new Date(iso);
+      const months = [
+        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+      ];
+      const day = d.getDate();
+      const month = months[d.getMonth()];
+      const year = d.getFullYear();
+      return `${day} De ${month} De ${year}`;
+    } catch {
+      return "24 De Maio De 2026";
+    }
+  };
+
+  const handleSaveContactInfo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    try {
+      const fullName = `${profileFirstName} ${profileLastName}`.trim();
+      await axios.put(`${apiBaseUrl}/api/v1/users/profile`, {
+        full_name: fullName
+      });
+      setProfileName(fullName);
+      
+      if (user) {
+        setUser({
+          ...user,
+          user_metadata: {
+            ...user.user_metadata,
+            full_name: fullName
+          }
+        });
+      }
+      
+      // Save contact/phone state locally
+      localStorage.setItem("general_settings", JSON.stringify({
+        profilePhoneArea,
+        profilePhoneNumber,
+        profileLanguage,
+        profileTimezone,
+        profileDateFormat,
+        profileTimeFormat
+      }));
+      
+      setSettingsSuccess("Informações de contato salvas com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    } catch (err: any) {
+      console.error("Failed to update profile info", err);
+      alert("Erro ao atualizar informações de contato.");
+    } finally {
+      setIsUpdatingSettings(false);
+    }
+  };
+
+  const handleSavePassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    setTimeout(() => {
+      setIsUpdatingSettings(false);
+      setSettingsSuccess("Senha atualizada com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    }, 800);
+  };
+
+  const handleSaveLanguage = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    localStorage.setItem("general_settings", JSON.stringify({
+      profilePhoneArea,
+      profilePhoneNumber,
+      profileLanguage,
+      profileTimezone,
+      profileDateFormat,
+      profileTimeFormat
+    }));
+    setTimeout(() => {
+      setIsUpdatingSettings(false);
+      setSettingsSuccess("Linguagem atualizada com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    }, 800);
+  };
+
+  const handleSaveTimezone = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    localStorage.setItem("general_settings", JSON.stringify({
+      profilePhoneArea,
+      profilePhoneNumber,
+      profileLanguage,
+      profileTimezone,
+      profileDateFormat,
+      profileTimeFormat
+    }));
+    setTimeout(() => {
+      setIsUpdatingSettings(false);
+      setSettingsSuccess("Fuso horário atualizado com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    }, 800);
+  };
+
+  const handleSaveDateTimeFormat = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    localStorage.setItem("general_settings", JSON.stringify({
+      profilePhoneArea,
+      profilePhoneNumber,
+      profileLanguage,
+      profileTimezone,
+      profileDateFormat,
+      profileTimeFormat
+    }));
+    setTimeout(() => {
+      setIsUpdatingSettings(false);
+      setSettingsSuccess("Formatos de data e hora atualizados com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    }, 800);
+  };
+
+  const handleSaveFiscalInfo = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    
+    // Persist in localStorage for smooth UX persistence
+    localStorage.setItem("fiscal_info", JSON.stringify({
+      fiscalType,
+      fiscalCompanyName,
+      fiscalCountry,
+      fiscalNif,
+      fiscalFirstName,
+      fiscalLastName,
+      fiscalAddress,
+      fiscalPostalCode,
+      fiscalCity,
+      fiscalEmail
+    }));
+    
+    setTimeout(() => {
+      setIsUpdatingSettings(false);
+      setSettingsSuccess("Informações fiscais salvas com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    }, 800);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!confirm("Tem certeza absoluta de que deseja excluir permanentemente sua conta? Esta ação é irreversível e excluirá todos os seus workspaces, transcrições e pastas!")) {
+      return;
+    }
+    
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    try {
+      await axios.delete(`${apiBaseUrl}/api/v1/users/profile`);
+      
+      // Sign out and clear local state/auth keys
+      try {
+        await supabase.auth.signOut();
+      } catch (e) {
+        // ignore
+      }
+      
+      if (typeof window !== "undefined") {
+        try {
+          // Clear localStorage
+          localStorage.clear();
+        } catch (e) {
+          // ignore
+        }
+        setUser(null);
+        alert("Sua conta foi excluída com sucesso.");
+        window.location.reload();
+      }
+    } catch (err: any) {
+      console.error("Failed to delete account", err);
+      alert(err.response?.data?.detail || "Erro ao excluir conta. Tente novamente mais tarde.");
+    } finally {
+      setIsUpdatingSettings(false);
+    }
+  };
+
+
+
+
   // Pix timer effect
   React.useEffect(() => {
     let timer: any;
@@ -236,7 +574,11 @@ export default function HomePage() {
   const loadHistory = async () => {
     setIsLoadingHistory(true);
     try {
-      const response = await axios.get(`${apiBaseUrl}/jobs`);
+      let url = `${apiBaseUrl}/jobs`;
+      if (selectedFolderId !== "all") {
+        url += `?folder_id=${selectedFolderId}`;
+      }
+      const response = await axios.get(url);
       setHistoryJobs(response.data);
     } catch (err) {
       console.error("Failed to load history", err);
@@ -245,13 +587,267 @@ export default function HomePage() {
     }
   };
 
+  const loadFolders = async () => {
+    setIsLoadingFolders(true);
+    try {
+      const response = await axios.get(`${apiBaseUrl}/api/v1/folders`);
+      setFolders(response.data);
+    } catch (err) {
+      console.error("Failed to load folders", err);
+    } finally {
+      setIsLoadingFolders(false);
+    }
+  };
+
+  const handleCreateFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFolderName.trim()) return;
+    setIsCreatingFolder(true);
+    try {
+      await axios.post(`${apiBaseUrl}/api/v1/folders`, { name: newFolderName });
+      setNewFolderName("");
+      setShowCreateFolderModal(false);
+      await loadFolders();
+    } catch (err) {
+      console.error("Failed to create folder", err);
+      alert("Erro ao criar pasta.");
+    } finally {
+      setIsCreatingFolder(false);
+    }
+  };
+
+  const handleDeleteFolder = async (folderId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Tem certeza que deseja excluir esta pasta? Todas as transcrições contidas nela também serão excluídas!")) return;
+    try {
+      await axios.delete(`${apiBaseUrl}/api/v1/folders/${folderId}`);
+      if (selectedFolderId === folderId) {
+        setSelectedFolderId("all");
+      }
+      await loadFolders();
+      await loadHistory();
+    } catch (err) {
+      console.error("Failed to delete folder", err);
+      alert("Erro ao excluir pasta.");
+    }
+  };
+
+
+  // Load workspace members
+  const loadWorkspaceMembers = async () => {
+    setIsLoadingMembers(true);
+    try {
+      const response = await axios.get(`${apiBaseUrl}/api/v1/workspaces/members`);
+      setWorkspaceMembers(response.data);
+    } catch (err) {
+      console.error("Failed to load workspace members", err);
+    } finally {
+      setIsLoadingMembers(false);
+    }
+  };
+
+  // Invite member
+  const handleInviteMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+    setIsInvitingMember(true);
+    setInviteError(null);
+    try {
+      await axios.post(`${apiBaseUrl}/api/v1/workspaces/members`, {
+        email: inviteEmail.trim().toLowerCase(),
+        role: inviteRole
+      });
+      setInviteEmail("");
+      setShowInviteModal(false);
+      await loadWorkspaceMembers();
+    } catch (err: any) {
+      console.error("Failed to invite member", err);
+      setInviteError(err.response?.data?.detail || "Erro ao convidar membro.");
+    } finally {
+      setIsInvitingMember(false);
+    }
+  };
+
+  // Remove member
+  const handleRemoveMember = async (memberId: string) => {
+    if (!confirm("Tem certeza que deseja remover este membro do workspace?")) return;
+    try {
+      await axios.delete(`${apiBaseUrl}/api/v1/workspaces/members/${memberId}`);
+      await loadWorkspaceMembers();
+    } catch (err: any) {
+      console.error("Failed to remove member", err);
+      alert(err.response?.data?.detail || "Erro ao remover membro.");
+    }
+  };
+
+  // Update Workspace Name
+  const handleUpdateWorkspaceName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!workspaceName.trim()) return;
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    try {
+      const res = await axios.put(`${apiBaseUrl}/api/v1/workspaces/current`, {
+        name: workspaceName.trim()
+      });
+      setWorkspaceName(res.data.workspace_name);
+      setSettingsSuccess("Configurações atualizadas com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    } catch (err: any) {
+      console.error("Failed to update workspace name", err);
+      alert("Erro ao atualizar nome do workspace.");
+    } finally {
+      setIsUpdatingSettings(false);
+    }
+  };
+
+  // Update User Profile Name
+  const handleUpdateProfileName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileName.trim()) return;
+    setIsUpdatingSettings(true);
+    setSettingsSuccess(null);
+    try {
+      const res = await axios.put(`${apiBaseUrl}/api/v1/users/profile`, {
+        full_name: profileName.trim()
+      });
+      setProfileName(res.data.full_name);
+      
+      if (user) {
+        setUser({
+          ...user,
+          user_metadata: {
+            ...user.user_metadata,
+            full_name: res.data.full_name
+          }
+        });
+      }
+      
+      setSettingsSuccess("Perfil atualizado com sucesso!");
+      setTimeout(() => setSettingsSuccess(null), 3000);
+    } catch (err: any) {
+      console.error("Failed to update profile name", err);
+      alert("Erro ao atualizar perfil.");
+    } finally {
+      setIsUpdatingSettings(false);
+    }
+  };
+
+  // Send Support Ticket
+  const handleSendSupportTicket = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supportSubject.trim() || !supportMessage.trim()) return;
+    setIsSendingSupport(true);
+    setSupportSuccess(null);
+    try {
+      await axios.post(`${apiBaseUrl}/api/v1/support/contact`, {
+        subject: supportSubject.trim(),
+        message: supportMessage.trim()
+      });
+      setSupportSubject("");
+      setSupportMessage("");
+      setSupportSuccess("Mensagem enviada com sucesso! Entraremos em contato em breve.");
+      setTimeout(() => setSupportSuccess(null), 5000);
+    } catch (err: any) {
+      console.error("Failed to send support ticket", err);
+      alert("Erro ao enviar mensagem de suporte.");
+    } finally {
+      setIsSendingSupport(false);
+    }
+  };
+
+
+  const handleMoveJob = async (jobId: string, folderId: string | null) => {
+    try {
+      let url = `${apiBaseUrl}/api/v1/jobs/${jobId}/move`;
+      if (folderId) {
+        url += `?folder_id=${folderId}`;
+      }
+      await axios.patch(url);
+      await loadHistory();
+    } catch (err) {
+      console.error("Failed to move job", err);
+      alert("Erro ao mover transcrição.");
+    }
+  };
+
+  React.useEffect(() => {
+    if (user) {
+      const email = user.email || "";
+      setProfileName(user.user_metadata?.full_name || email.split("@")[0] || "");
+      
+      // Parse full name into First and Last name states
+      const fullName = user.user_metadata?.full_name || "Marcus Pereira";
+      const parts = fullName.split(" ");
+      setProfileFirstName(parts[0] || "Marcus");
+      setProfileLastName(parts.slice(1).join(" ") || "Pereira");
+      
+      setFiscalEmail(email);
+      setFiscalFirstName(parts[0] || "");
+      setFiscalLastName(parts.slice(1).join(" ") || "");
+      
+      // Load local storage values if they exist
+      try {
+        const savedFiscal = localStorage.getItem("fiscal_info");
+        if (savedFiscal) {
+          const parsed = JSON.parse(savedFiscal);
+          if (parsed.fiscalType) setFiscalType(parsed.fiscalType);
+          if (parsed.fiscalCompanyName) setFiscalCompanyName(parsed.fiscalCompanyName);
+          if (parsed.fiscalCountry) setFiscalCountry(parsed.fiscalCountry);
+          if (parsed.fiscalNif) setFiscalNif(parsed.fiscalNif);
+          if (parsed.fiscalFirstName) setFiscalFirstName(parsed.fiscalFirstName);
+          if (parsed.fiscalLastName) setFiscalLastName(parsed.fiscalLastName);
+          if (parsed.fiscalAddress) setFiscalAddress(parsed.fiscalAddress);
+          if (parsed.fiscalPostalCode) setFiscalPostalCode(parsed.fiscalPostalCode);
+          if (parsed.fiscalCity) setFiscalCity(parsed.fiscalCity);
+          if (parsed.fiscalEmail) setFiscalEmail(parsed.fiscalEmail);
+        }
+        
+        const savedGeneral = localStorage.getItem("general_settings");
+        if (savedGeneral) {
+          const parsed = JSON.parse(savedGeneral);
+          if (parsed.profilePhoneArea) setProfilePhoneArea(parsed.profilePhoneArea);
+          if (parsed.profilePhoneNumber) setProfilePhoneNumber(parsed.profilePhoneNumber);
+          if (parsed.profileLanguage) setProfileLanguage(parsed.profileLanguage);
+          if (parsed.profileTimezone) setProfileTimezone(parsed.profileTimezone);
+          if (parsed.profileDateFormat) setProfileDateFormat(parsed.profileDateFormat);
+          if (parsed.profileTimeFormat) setProfileTimeFormat(parsed.profileTimeFormat);
+        }
+      } catch (e) {
+        console.warn("Failed to load settings from localStorage", e);
+      }
+
+      loadFolders();
+      loadHistory();
+      loadWorkspaceMembers();
+      setViewMode("history"); // Force dashboard/history mode immediately when logged in
+    } else {
+      setFolders([]);
+      setWorkspaceMembers([]);
+    }
+  }, [user]);
+
+  React.useEffect(() => {
+    if (viewMode === "history" && user) {
+      loadHistory();
+    }
+  }, [viewMode, user, selectedFolderId]);
+
   const handleViewJob = async (job: any) => {
     setIsTranscribing(true);
     setError(null);
     setResult(null);
     setJobId(job.job_id);
-    setJobStatus(null);
+    setJobStatus(job.status);
     setAudioUrl(`${apiBaseUrl}/jobs/${job.job_id}/audio`);
+    
+    // Se o job ainda estiver na fila ou processando, redireciona para a tela de progresso e inicia o polling
+    if (job.status === "queued" || job.status === "processing") {
+      setViewMode("transcribe");
+      setTranscriptionProgress(job.status === "queued" ? 10 : 45);
+      pollJobStatus(job.job_id);
+      return;
+    }
     
     try {
       const resultResponse = await axios.get(`${apiBaseUrl}/jobs/${job.job_id}/result?format=json`);
@@ -260,8 +856,18 @@ export default function HomePage() {
       setViewMode("transcribe");
     } catch (err: any) {
       console.error("Failed to load job details", err);
-      setError("Erro ao carregar detalhes da transcrição.");
+      // Evita travamento de tela (AxiosError unhandled) exibindo alerta elegante e resetando estado
+      let errorMsg = "Erro ao carregar detalhes da transcrição.";
+      if (err.response?.status === 409) {
+        setViewMode("transcribe");
+        setJobStatus("processing");
+        setTranscriptionProgress(50);
+        pollJobStatus(job.job_id);
+        return;
+      }
+      setError(errorMsg);
       setIsTranscribing(false);
+      alert(errorMsg);
     }
   };
 
@@ -356,18 +962,37 @@ export default function HomePage() {
       setJobStatus(status);
 
       if (status === "completed") {
-        const resultResponse = await axios.get(`${apiBaseUrl}/jobs/${id}/result?format=json`);
-        setResult(resultResponse.data);
-        setIsTranscribing(false);
-        // setJobId(null); // Manter o jobId para permitir download do áudio
-        setJobStatus(null);
+        setTranscriptionProgress(100);
+        setTimeout(async () => {
+          try {
+            const resultResponse = await axios.get(`${apiBaseUrl}/jobs/${id}/result?format=json`);
+            setResult(resultResponse.data);
+            setIsTranscribing(false);
+            setJobStatus(null);
+          } catch (resErr) {
+            console.error("Failed to load completed job results", resErr);
+            setError("Erro ao carregar os resultados da transcrição.");
+            setIsTranscribing(false);
+          }
+        }, 800);
       } else if (status === "failed") {
         setError(jobError || "Erro no processamento do job.");
         setIsTranscribing(false);
         setJobId(null);
         setJobStatus(null);
+        setTranscriptionProgress(0);
       } else {
-        // Continue polling
+        setTranscriptionProgress((prev) => {
+          if (status === "queued") {
+            return prev < 15 ? prev + 2 : 15;
+          } else { // "processing"
+            if (prev < 40) return prev + 8;
+            if (prev < 70) return prev + 4;
+            if (prev < 90) return prev + 2;
+            if (prev < 96) return prev + 0.5;
+            return 96;
+          }
+        });
         setTimeout(() => pollJobStatus(id), 3000);
       }
     } catch (err: any) {
@@ -381,20 +1006,18 @@ export default function HomePage() {
     e.preventDefault();
     setIsCheckingOut(true);
     setCheckoutError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
     try {
-      // Collect IP dynamically from script if present
-      let clientIp = "127.0.0.1";
-      if (window.AppmaxScripts) {
-        // AppmaxJS collects the IP, so we extract it or fallback to a standard client IP
-      }
-      
       const payload: any = {
         first_name: checkoutForm.first_name,
         last_name: checkoutForm.last_name,
         email: checkoutForm.email,
         phone: checkoutForm.phone,
         document_number: checkoutForm.document_number,
-        ip: clientIp,
+        ip: "127.0.0.1",
         payment_method: checkoutForm.payment_method,
         postcode: checkoutForm.postcode || null,
         street: checkoutForm.street || null,
@@ -406,40 +1029,93 @@ export default function HomePage() {
       };
 
       if (checkoutForm.payment_method === "credit_card") {
-        // Appmax JS tokenization mock or sandbox simulation:
         payload.card_token = "mock_cc_token_from_frontend_" + Math.random().toString(36).substring(7);
         payload.card_holder_name = checkoutForm.card_holder_name || `${checkoutForm.first_name} ${checkoutForm.last_name}`;
         payload.card_holder_document = checkoutForm.card_holder_document || checkoutForm.document_number;
         payload.installments = Number(checkoutForm.installments);
       }
 
-      const response = await axios.post(`${apiBaseUrl}/api/v1/payments/checkout`, payload);
+      const response = await axios.post(`${apiBaseUrl}/api/v1/payments/checkout`, payload, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
       setCheckoutResult(response.data);
       const checkoutUrl = response.data.checkout_url;
       
       if (checkoutUrl) {
         window.location.href = checkoutUrl;
       } else {
+        throw new Error("Checkout URL não retornada pelo gateway de pagamento.");
+      }
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      console.error("Checkout submit error", err);
+      if (err.name === "CanceledError" || err.name === "AbortError") {
+        setCheckoutError("Tempo esgotado. Verifique sua conexão e tente novamente.");
+      } else {
+        setCheckoutError(err.response?.data?.detail || err.message || "Erro ao processar pagamento. Tente novamente.");
+      }
+    } finally {
+      setIsCheckingOut(false);
+    }
+  };
+
+  const handleInstantCheckout = async () => {
+    if (isInstantCheckingOut) return;
+    setIsInstantCheckingOut(true);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+    try {
+      const payload: any = {
+        first_name: profileFirstName || "Usuário",
+        last_name: profileLastName || "Transcribe",
+        email: user?.email || "",
+        phone: (profilePhoneArea && profilePhoneNumber) ? `${profilePhoneArea}${profilePhoneNumber}` : null,
+        payment_method: "pix"
+      };
+
+      const response = await axios.post(`${apiBaseUrl}/api/v1/payments/checkout`, payload, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      
+      const checkoutUrl = response.data.checkout_url;
+      if (checkoutUrl) {
+        window.location.href = checkoutUrl;
+      } else {
         throw new Error("Checkout URL não retornada pelo Abacate Pay.");
       }
     } catch (err: any) {
-      console.error("Checkout submit error", err);
-      setCheckoutError(err.response?.data?.detail || "Erro ao processar pagamento na Abacate Pay.");
+      clearTimeout(timeoutId);
+      console.error("Instant checkout error", err);
+      let errorMsg = "Erro ao processar checkout. Tente novamente.";
+      if (err.name === "CanceledError" || err.name === "AbortError") {
+        errorMsg = "Tempo esgotado. Verifique sua conexão e tente novamente.";
+      } else if (err.response?.data?.detail) {
+        errorMsg = err.response.data.detail;
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      alert(errorMsg);
     } finally {
-      setIsCheckingOut(false);
+      setIsInstantCheckingOut(false);
     }
   };
 
   const startTranscription = async () => {
     if ((tab === "local" && !file) || (tab === "online" && !url)) return;
     
-    // Billing subscription guard check
-    if (subscriptionStatus !== "active") {
-      setShowUpgradeModal(true);
-      return;
-    }
+    // Billing guard: backend returns active for all users in DEV_MODE
+    // if (subscriptionStatus !== "active") {
+    //   setShowUpgradeModal(true);
+    //   return;
+    // }
 
     setIsTranscribing(true);
+    setViewMode("transcribe");
+    setTranscriptionProgress(5);
     setError(null);
     setResult(null);
     setJobStatus("queued");
@@ -456,6 +1132,9 @@ export default function HomePage() {
     formData.append("translate", translateAudio ? "true" : "false");
     formData.append("restore_audio", restoreAudio ? "true" : "false");
     formData.append("mode", transcribeMode);
+    if (selectedFolderUploadId) {
+      formData.append("folder_id", selectedFolderUploadId);
+    }
 
     try {
       // Usando o endpoint de jobs (assíncrono)
@@ -550,6 +1229,1920 @@ export default function HomePage() {
     setIsMenuOpen(false);
   };
 
+  if (user) {
+    return (
+      <div className="min-h-screen bg-[#F9FAFB] flex relative font-sans text-gray-900 overflow-x-hidden">
+        {/* Sidebar Esquerda Unificada */}
+        <aside className="w-[260px] h-screen bg-white border-r border-gray-100 flex flex-col justify-between shrink-0 p-6 fixed left-0 top-0 z-30">
+          <div className="flex flex-col gap-8 w-full">
+            {/* Logo Transcribe */}
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-md shadow-indigo-600/10">
+                <Mic className="w-5 h-5 text-white" />
+              </div>
+              <span className="text-lg font-bold text-gray-900 tracking-tight">Transcribe</span>
+            </div>
+            
+            {/* Menu Items */}
+            <nav className="flex flex-col gap-1 w-full">
+              <button 
+                onClick={() => { setActiveTab("transcriptions"); setViewMode("history"); }}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === "transcriptions" 
+                    ? "bg-indigo-50 text-indigo-600 shadow-[0_2px_8px_rgba(99,102,241,0.04)]" 
+                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                }`}
+              >
+                <AudioLines className="w-4 h-4" />
+                Transcrições
+              </button>
+              <button 
+                onClick={() => setActiveTab("billing")}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === "billing" 
+                    ? "bg-indigo-50 text-indigo-600 shadow-[0_2px_8px_rgba(99,102,241,0.04)]" 
+                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                }`}
+              >
+                <CreditCard className="w-4 h-4" />
+                Cobrança
+              </button>
+              <button 
+                onClick={() => setActiveTab("users")}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === "users" 
+                    ? "bg-indigo-50 text-indigo-600 shadow-[0_2px_8px_rgba(99,102,241,0.04)]" 
+                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                Usuários
+              </button>
+            </nav>
+          </div>
+
+          <div className="flex flex-col gap-4 w-full">
+            {/* Bottom Menu Items */}
+            <nav className="flex flex-col gap-1 w-full">
+              <button 
+                onClick={() => setActiveTab("settings")}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === "settings" 
+                    ? "bg-indigo-50 text-indigo-600 shadow-[0_2px_8px_rgba(99,102,241,0.04)]" 
+                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                }`}
+              >
+                <Settings2 className="w-4 h-4" />
+                Configurações
+              </button>
+              <button 
+                onClick={() => setActiveTab("contact")}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === "contact" 
+                    ? "bg-indigo-50 text-indigo-600 shadow-[0_2px_8px_rgba(99,102,241,0.04)]" 
+                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                }`}
+              >
+                <HelpCircle className="w-4 h-4" />
+                Contate-nos
+              </button>
+            </nav>
+
+            <div className="border-t border-gray-100 my-1"></div>
+
+            {/* Profile & Sair */}
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col min-w-0 pl-1">
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Conta ativa</span>
+                <span className="text-xs font-semibold text-gray-700 truncate" title={user.email}>{user.email}</span>
+              </div>
+              <button 
+                onClick={async () => { await supabase.auth.signOut(); setUser(null); }}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-bold text-red-500 hover:bg-red-50 transition-all w-full"
+              >
+                <LogOut className="w-4 h-4" />
+                Sair
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        {/* Área Principal de Conteúdo */}
+        <main className="flex-1 min-h-screen ml-[260px] p-8 md:p-12 overflow-y-auto bg-[#F9FAFB] relative z-10">
+          
+          {/* TAB 1: TRANSCRIPÇÕES (DEFAULT) */}
+          {activeTab === "transcriptions" && (
+            <div className="w-full max-w-5xl mx-auto flex flex-col gap-6">
+              {isTranscribing ? (
+                /* LOADING LOADER VIEW */
+                <div className="w-full max-w-[800px] mt-2 z-10 flex flex-col items-center mx-auto animate-[fadeIn_0.2s_ease-out]">
+                  <div className="w-full flex items-center justify-between mb-4 px-2">
+                    <button onClick={() => { setIsTranscribing(false); setJobId(null); setJobStatus(null); }} className="flex items-center gap-2 text-indigo-500 font-[600] text-[13px] hover:text-indigo-600 transition-colors">
+                      <ArrowLeft className="w-4 h-4" />
+                      Voltar ao Painel
+                    </button>
+                  </div>
+                  
+                  <div className="w-full bg-white rounded-[24px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 p-6 md:p-8 flex flex-col items-center">
+                    <div className="w-full flex items-center justify-between border-b border-gray-100 pb-5 mb-5">
+                      <div className="flex items-center gap-3 text-left">
+                         <div className="p-2.5 bg-[#F6F8FF] text-indigo-600 rounded-xl">
+                           <FileAudio className="w-5 h-5" />
+                         </div>
+                         <div className="flex flex-col gap-1 w-48">
+                           <div className="flex justify-between items-center text-[10px] text-gray-400 font-bold">
+                             <span>Progresso</span>
+                             <span>{Math.round(transcriptionProgress)}%</span>
+                           </div>
+                           <div className="h-2 bg-gray-100 rounded-full overflow-hidden relative">
+                             <div 
+                               className="absolute top-0 left-0 h-full bg-indigo-600 rounded-full transition-all duration-500 ease-out animate-[pulse_2s_infinite]" 
+                               style={{ width: `${transcriptionProgress}%` }}
+                             />
+                           </div>
+                         </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                         <div className="flex items-center gap-1.5 text-gray-400 text-sm font-medium">
+                           <Clock className="w-4 h-4" />
+                           <div className="h-2 w-12 bg-gray-200 rounded-full overflow-hidden relative">
+                             <div 
+                               className="absolute top-0 left-0 h-full bg-gray-300 rounded-full transition-all duration-500"
+                               style={{ width: `${transcriptionProgress}%` }}
+                             />
+                           </div>
+                         </div>
+                         <div className="px-3 py-1.5 flex items-center gap-1.5 bg-[#F8FAFF] text-indigo-600 rounded-full border border-indigo-100 text-[12px] font-[700]">
+                           <Loader2 className="w-3.5 h-3.5 animate-spin"/> {jobStatus === "processing" ? "Processando..." : "Na fila"}
+                         </div>
+                      </div>
+                    </div>
+
+                    <div className="w-full flex items-center gap-8 border-b border-gray-100 mb-20 px-2 justify-start overflow-x-auto">
+                       <button className="pb-4 text-[13px] tracking-wide font-bold text-indigo-600 border-b-2 border-indigo-600 whitespace-nowrap relative top-[1px]">Transcrição</button>
+                       <button className="pb-4 text-[13px] tracking-wide font-semibold text-gray-400 hover:text-gray-600 transition-colors whitespace-nowrap">Editar</button>
+                       <button className="pb-4 text-[13px] tracking-wide font-semibold text-gray-400 hover:text-gray-600 transition-colors whitespace-nowrap">Traduzir</button>
+                       <button className="pb-4 text-[13px] tracking-wide font-semibold text-gray-400 hover:text-gray-600 transition-colors whitespace-nowrap">Resumo</button>
+                    </div>
+
+                    <div className="flex flex-col items-center justify-center pt-8 pb-32">
+                       <div className="w-[96px] h-[96px] bg-[#F8FAFF] rounded-full flex flex-col items-center justify-center mb-6 relative border-[6px] border-white shadow-[0_0_0_1px_rgba(99,102,241,0.1)]">
+                         <span className="text-lg font-extrabold text-indigo-600 tracking-tight">{Math.round(transcriptionProgress)}%</span>
+                         <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">Whisper</span>
+                       </div>
+                       <h3 className="text-[16px] font-bold text-gray-900 mb-2">Estamos processando sua transcrição...</h3>
+                       <p className="text-[13px] font-medium text-gray-500">
+                         {jobStatus === "processing" ? "Extraindo áudio e transcrevendo..." : "Aguardando na fila de processamento..."}
+                       </p>
+                    </div>
+                  </div>
+                </div>
+              ) : result ? (
+                /* RESULT DISPLAY VIEW */
+                <div className="w-full max-w-4xl mt-2 z-10 flex flex-col items-center mx-auto animate-[fadeIn_0.2s_ease-out]">
+                  <div className="w-full flex items-center justify-between mb-4 px-2">
+                    <button onClick={() => setResult(null)} className="flex items-center gap-2 text-indigo-500 font-[600] text-[13px] hover:text-indigo-600 transition-colors cursor-pointer">
+                      <ArrowLeft className="w-4 h-4" />
+                      Voltar ao Painel
+                    </button>
+                  </div>
+                  
+                  <div className="w-full bg-white rounded-[24px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 p-6 md:p-8 flex flex-col">
+                    <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-5">
+                      <div className="flex items-center gap-3 text-left">
+                        <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                          <FileAudio className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h2 className="text-[16px] font-bold text-gray-900 leading-tight">
+                            {file?.name || (result as any)?.filename || "Transcrição de Áudio"}
+                          </h2>
+                          <p className="text-[10px] text-gray-400 font-semibold uppercase mt-0.5">
+                            {result.segments.length > 0 && result.segments[result.segments.length-1] ? `${Math.ceil(result.segments[result.segments.length-1]!.end / 60)} minutos` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="relative">
+                        <button 
+                          onClick={() => setIsMenuOpen(!isMenuOpen)}
+                          className="w-8 h-8 flex items-center justify-center text-gray-500 bg-gray-50 border border-gray-100 cursor-pointer hover:bg-gray-100 hover:text-indigo-600 transition-colors rounded-[8px]"
+                        >
+                          <MoreHorizontal className="w-4 h-4" />
+                        </button>
+                        
+                        {isMenuOpen && (
+                          <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-100 rounded-xl shadow-lg py-1.5 z-30 animate-[fadeIn_0.15s_ease-out]">
+                            <button onClick={exportTranscription} className="w-full px-4 py-2 text-left text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-2 cursor-pointer">
+                              <Download className="w-3.5 h-3.5" /> Exportar TXT
+                            </button>
+                            <button onClick={shareTranscription} className="w-full px-4 py-2 text-left text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-2 cursor-pointer">
+                              <Copy className="w-3.5 h-3.5" /> Copiar texto
+                            </button>
+                            <button onClick={downloadAudio} className="w-full px-4 py-2 text-left text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-2 cursor-pointer">
+                              <Volume2 className="w-3.5 h-3.5" /> Baixar áudio
+                            </button>
+                            <button onClick={() => {setResult(null); setFile(null); setUrl(""); setIsMenuOpen(false);}} className="w-full px-4 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 flex items-center gap-2 border-t border-gray-50 cursor-pointer">
+                              <Trash2 className="w-3.5 h-3.5" /> Fechar
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="w-full flex items-center gap-8 border-b border-gray-100 mb-6 px-2 justify-start overflow-x-auto">
+                       <button onClick={() => setActiveResultTab("transcricao")} className={`pb-4 text-[13px] tracking-wide font-semibold whitespace-nowrap transition-colors relative top-[1px] border-b-2 ${activeResultTab === "transcricao" ? "text-indigo-600 border-indigo-600 font-bold" : "text-gray-400 border-transparent hover:text-gray-600 hover:border-gray-200"}`}>Transcrição</button>
+                       <button onClick={() => { setActiveResultTab("editar"); setEditedText(result.text); }} className={`pb-4 text-[13px] tracking-wide font-semibold whitespace-nowrap transition-colors relative top-[1px] border-b-2 ${activeResultTab === "editar" ? "text-indigo-600 border-indigo-600 font-bold" : "text-gray-400 border-transparent hover:text-gray-600 hover:border-gray-200"}`}>Editar</button>
+                       <button onClick={() => setActiveResultTab("traduzir")} className={`pb-4 text-[13px] tracking-wide font-semibold whitespace-nowrap transition-colors relative top-[1px] border-b-2 ${activeResultTab === "traduzir" ? "text-indigo-600 border-indigo-600 font-bold" : "text-gray-400 border-transparent hover:text-gray-600 hover:border-gray-200"}`}>Traduzir</button>
+                       <button onClick={() => setActiveResultTab("resumo")} className={`pb-4 text-[13px] tracking-wide font-semibold whitespace-nowrap transition-colors relative top-[1px] border-b-2 ${activeResultTab === "resumo" ? "text-indigo-600 border-indigo-600 font-bold" : "text-gray-400 border-transparent hover:text-gray-600 hover:border-gray-200"}`}>Resumo</button>
+                    </div>
+
+                    <div className="w-full min-h-[300px] text-left">
+                      {activeResultTab === "transcricao" && (
+                        <div className="space-y-4">
+                          {result.segments.map((segment, idx) => (
+                            <div key={idx} className="flex items-start gap-4 hover:bg-gray-50/50 p-2.5 rounded-xl transition-colors">
+                              <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50/70 px-2 py-1 rounded-md shrink-0 select-none">
+                                {new Date(segment.start * 1000).toISOString().substr(14, 5)}
+                              </span>
+                              <div className="flex flex-col">
+                                {segment.speaker && (
+                                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">
+                                    {segment.speaker}
+                                  </span>
+                                )}
+                                <p className="text-xs text-gray-700 font-medium leading-relaxed">
+                                  {segment.text}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {activeResultTab === "editar" && (
+                        <div className="flex flex-col gap-4">
+                          <textarea 
+                            value={editedText}
+                            onChange={(e) => setEditedText(e.target.value)}
+                            className="w-full h-64 p-4 border border-gray-100 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 text-xs font-medium leading-relaxed text-gray-700 bg-gray-50/50"
+                          />
+                          <div className="flex justify-end gap-3">
+                            <button 
+                              onClick={() => {
+                                if (result) {
+                                  setResult({
+                                    ...result,
+                                    text: editedText,
+                                    segments: [{
+                                      start: 0,
+                                      end: result.segments.length > 0 ? (result.segments[result.segments.length-1]?.end ?? 0) : 0,
+                                      speaker: result.segments.length > 0 ? (result.segments[result.segments.length-1]?.speaker ?? "") : "",
+                                      text: editedText
+                                    }]
+                                  });
+                                  setActiveResultTab("transcricao");
+                                  alert("Transcrição atualizada com sucesso!");
+                                }
+                              }}
+                              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm cursor-pointer"
+                            >
+                              Salvar alterações
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {activeResultTab === "traduzir" && (
+                        <div className="flex flex-col gap-4">
+                          <div className="flex items-center gap-3">
+                            <select 
+                              value={targetTranslationLanguage}
+                              onChange={(e) => setTargetTranslationLanguage(e.target.value)}
+                              className="appearance-none bg-gray-50 border border-gray-100 text-xs font-bold text-gray-700 rounded-xl px-4 py-2.5 outline-none min-w-[140px]"
+                            >
+                              <option value="en">🇺🇸 Inglês</option>
+                              <option value="pt">🇧🇷 Português</option>
+                              <option value="es">🇪🇸 Espanhol</option>
+                            </select>
+                            <button 
+                              onClick={handleTranslation}
+                              disabled={isProcessingAction}
+                              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl disabled:opacity-50 flex items-center gap-1.5 cursor-pointer shadow-sm"
+                            >
+                              {isProcessingAction && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                              Traduzir
+                            </button>
+                          </div>
+                          {translatedText && (
+                            <div className="p-4 bg-gray-50/50 border border-gray-100 rounded-xl">
+                              <p className="text-xs text-gray-700 font-medium leading-relaxed whitespace-pre-wrap">{translatedText}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {activeResultTab === "resumo" && (
+                        <div className="flex flex-col gap-4 text-left">
+                          <div className="flex justify-start">
+                            <button 
+                              onClick={handleSummarize}
+                              disabled={isProcessingAction}
+                              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl disabled:opacity-50 flex items-center gap-1.5 cursor-pointer shadow-sm"
+                            >
+                              {isProcessingAction && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                              Gerar Inteligência do Áudio
+                            </button>
+                          </div>
+                          {summaryText && (
+                            <div className="p-5 bg-[#F8FAFF] border border-indigo-50 rounded-xl">
+                              <p className="text-xs text-gray-700 font-medium leading-relaxed whitespace-pre-wrap">{summaryText}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* RENDER THE STANDARD HISTORY LIST */
+                <>
+                  {/* Header com botão de upload */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
+                        {selectedFolderId === "all" 
+                          ? "Todas as transcrições" 
+                          : selectedFolderId === "root" 
+                            ? "Nível Raiz (Sem pasta)" 
+                            : folders.find(f => f.id === selectedFolderId)?.name || "Transcrição"}
+                      </h1>
+                      <p className="text-xs text-gray-500 font-medium">Consulte e organize todos os seus históricos escolares e gravações.</p>
+                    </div>
+                    <button 
+                      onClick={() => setShowUploadModal(true)}
+                      className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
+                    >
+                      <Mic className="w-4 h-4" />
+                      Criar novo
+                    </button>
+                  </div>
+
+                  {/* Upgrade or Cancelled Info Banner */}
+                  {subscriptionStatus === "inactive" && (
+                    <div className="w-full bg-white border border-indigo-50 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-[0_4px_20px_rgba(99,102,241,0.01)]">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shrink-0">
+                          <Zap className="w-5 h-5 animate-pulse" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-gray-900 mb-0.5">Desbloqueie mais recursos!</h3>
+                          <p className="text-xs text-gray-500 font-medium">Atualize seu plano para desfrutar de processamento ilimitado de arquivos e armazenamento ampliado.</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => setActiveTab("billing")}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm shrink-0 cursor-pointer"
+                      >
+                        Plano de atualização
+                      </button>
+                    </div>
+                  )}
+
+                  {subscriptionStatus === "cancelled" && (
+                    <div className="w-full bg-amber-50/50 border border-amber-200 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-[0_4px_20px_rgba(245,158,11,0.02)]">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center shrink-0">
+                          <Calendar className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-amber-900 mb-0.5">Assinatura cancelada em andamento</h3>
+                          <p className="text-xs text-amber-700 font-medium">
+                            Seu acesso PRO continuará ativo até <strong className="font-bold text-amber-950">{subscriptionData?.expires_at ? formatDate(subscriptionData.expires_at) : "o fim do período"}</strong>. Após essa data, sua conta retornará ao plano gratuito.
+                          </p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => setActiveTab("billing")}
+                        className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm shrink-0 cursor-pointer"
+                      >
+                        Reativar Plano
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Pastas Section */}
+                  <div className="w-full">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-sm font-bold text-gray-800">Pastas</h2>
+                      <button 
+                        onClick={() => setShowCreateFolderModal(true)}
+                        className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                      >
+                        <FolderPlus className="w-4 h-4" />
+                        Nova pasta
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                      {/* Card Todas */}
+                      <div 
+                        onClick={() => setSelectedFolderId("all")}
+                        className={`p-4 rounded-2xl border text-left cursor-pointer transition-all ${
+                          selectedFolderId === "all" 
+                            ? "bg-white border-indigo-200 shadow-[0_4px_20px_rgba(99,102,241,0.04)] text-indigo-600" 
+                            : "bg-white border-gray-100 hover:border-gray-200 text-gray-600"
+                        }`}
+                      >
+                        <Folder className={`w-8 h-8 mb-3 ${selectedFolderId === "all" ? "text-indigo-500" : "text-gray-400"}`} />
+                        <span className="text-xs font-bold truncate block">Todas</span>
+                      </div>
+
+                      {/* Card Raiz */}
+                      <div 
+                        onClick={() => setSelectedFolderId("root")}
+                        className={`p-4 rounded-2xl border text-left cursor-pointer transition-all ${
+                          selectedFolderId === "root" 
+                            ? "bg-white border-indigo-200 shadow-[0_4px_20px_rgba(99,102,241,0.04)] text-indigo-600" 
+                            : "bg-white border-gray-100 hover:border-gray-200 text-gray-600"
+                        }`}
+                      >
+                        <Folder className={`w-8 h-8 mb-3 ${selectedFolderId === "root" ? "text-indigo-400" : "text-gray-400"}`} />
+                        <span className="text-xs font-bold truncate block">Nível Raiz</span>
+                      </div>
+
+                      {/* Card folders list */}
+                      {folders.map(f => (
+                        <div 
+                          key={f.id}
+                          onClick={() => setSelectedFolderId(f.id)}
+                          className={`group p-4 rounded-2xl border text-left cursor-pointer transition-all relative ${
+                            selectedFolderId === f.id 
+                              ? "bg-white border-indigo-200 shadow-[0_4px_20px_rgba(99,102,241,0.04)] text-indigo-600" 
+                              : "bg-white border-gray-100 hover:border-gray-200 text-gray-600"
+                          }`}
+                        >
+                          <Folder className={`w-8 h-8 mb-3 ${selectedFolderId === f.id ? "text-indigo-500" : "text-indigo-400"}`} />
+                          <span className="text-xs font-bold truncate block pr-6">{f.name}</span>
+                          <button 
+                            onClick={(e) => handleDeleteFolder(f.id, e)}
+                            className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Transcrições Section */}
+                  <div className="w-full mt-2">
+                    <h2 className="text-sm font-bold text-gray-800 mb-4">Transcrições</h2>
+                    
+                    {isLoadingHistory ? (
+                      <div className="w-full bg-white rounded-2xl border border-gray-100 p-12 flex flex-col items-center justify-center gap-3">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                        <span className="text-xs text-gray-500 font-medium">Carregando históricos...</span>
+                      </div>
+                    ) : historyJobs.length === 0 ? (
+                      <div className="w-full bg-white rounded-2xl border border-gray-100 p-16 flex flex-col items-center justify-center text-center gap-4">
+                        <div className="w-12 h-12 bg-gray-50 border border-gray-100 rounded-full flex items-center justify-center text-gray-400">
+                          <FileText className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-gray-800 mb-1">Nenhum histórico escolar encontrado</h3>
+                          <p className="text-xs text-gray-400 max-w-sm mx-auto font-medium">Crie pastas ou envie novas gravações clicando no botão Criar novo.</p>
+                        </div>
+                        <button 
+                          onClick={() => setShowUploadModal(true)}
+                          className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                        >
+                          <FolderPlus className="w-4 h-4" />
+                          Criar novo
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3">
+                        {historyJobs.map(job => (
+                          <div 
+                            key={job.job_id}
+                            className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center justify-between gap-4 hover:border-gray-200 hover:shadow-sm transition-all cursor-pointer"
+                            onClick={() => handleViewJob(job)}
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shrink-0">
+                                <FileAudio className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0 text-left">
+                                <h4 className="text-xs font-bold text-gray-900 truncate mb-1" title={job.filename || "Gravação Sem Nome"}>
+                                  {job.filename || "Gravação Sem Nome"}
+                                </h4>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-400 font-semibold uppercase">
+                                  <span>{new Date(job.created_at).toLocaleDateString("pt-BR")}</span>
+                                  <span>•</span>
+                                  <span>{job.language === "pt" ? "Português" : job.language === "en" ? "Inglês" : job.language === "es" ? "Espanhol" : "Português"}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4 shrink-0">
+                              {/* Folder Mover Selector */}
+                              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                                <select 
+                                  value={job.folder_id || ""}
+                                  onChange={(e) => handleMoveJob(job.job_id, e.target.value || null)}
+                                  className="appearance-none bg-gray-50 border border-gray-100 text-[11px] font-bold text-gray-600 px-3 py-1.5 pr-7 rounded-xl outline-none hover:bg-gray-100 transition-colors"
+                                >
+                                  <option value="">📁 Sem Pasta</option>
+                                  {folders.map(f => (
+                                    <option key={f.id} value={f.id}>📁 {f.name}</option>
+                                  ))}
+                                </select>
+                                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
+                              </div>
+
+                              {/* Status and Actions */}
+                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                job.status === "completed" 
+                                  ? "bg-green-50 text-green-600" 
+                                  : job.status === "failed" 
+                                    ? "bg-red-50 text-red-600" 
+                                    : "bg-indigo-50 text-indigo-600 animate-pulse"
+                              }`}>
+                                {job.status === "completed" ? "Concluído" : job.status === "failed" ? "Falhou" : "Na fila"}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: COBRANÇA (BILLING) */}
+          {activeTab === "billing" && (
+            <div className="w-full max-w-4xl mx-auto flex flex-col gap-6 text-left animate-[fadeIn_0.2s_ease-out]">
+              
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-gray-100 pb-4">
+                <h1 className="text-xl font-bold text-gray-900 tracking-tight">Inicie sua assinatura do Transcribe</h1>
+              </div>
+
+              {/* Central Premium Container */}
+              <div className="w-full bg-white rounded-3xl border border-gray-100 shadow-[0_8px_30px_rgba(0,0,0,0.02)] p-8 flex flex-col gap-6 items-center">
+                
+                {/* Today vs Monthly Grid */}
+                <div className="w-full grid grid-cols-2 text-center relative py-2">
+                  {/* Today Column */}
+                  <div className="flex flex-col items-center">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Hoje</span>
+                    <span className="text-3xl font-extrabold text-gray-900 tracking-tight">R$ 5,00</span>
+                    <span className="text-xs font-semibold text-gray-400 mt-2">Teste gratuito de 7 dias</span>
+                  </div>
+
+                  {/* Vertical Divider */}
+                  <div className="absolute top-1/2 left-1/2 -translate-y-1/2 w-[1px] h-16 bg-gray-100"></div>
+
+                  {/* Then Column */}
+                  <div className="flex flex-col items-center">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Então</span>
+                    <span className="text-3xl font-extrabold text-gray-900 tracking-tight">R$ 150,00</span>
+                    <span className="text-xs font-semibold text-gray-400 mt-2">mensal</span>
+                  </div>
+                </div>
+
+                {/* Trial Description Textbox */}
+                <div className="w-full bg-gray-50/70 border border-gray-100 rounded-2xl p-5 text-center text-[11px] leading-relaxed text-gray-500 font-medium max-w-2xl">
+                  Ao ativar seu período de teste gratuito de 7 dias por <strong className="text-gray-800">R$ 5,00</strong>, você inicia uma <strong className="text-gray-800">assinatura mensal recorrente</strong>. Após o término do período de teste, a taxa padrão de <strong className="text-gray-800">R$ 150,00</strong> será cobrada automaticamente todos os meses. Você pode cancelar a qualquer momento pelo seu painel de controle. Para evitar a cobrança de <strong className="text-gray-800">R$ 150,00</strong>, você deve cancelar pelo menos <strong className="text-gray-800">1 hora</strong> antes do término do período de teste.
+                </div>
+
+                {/* Trial CTA Button */}
+                <div className="flex flex-col items-center gap-3 w-full mt-2">
+                  <button 
+                    onClick={handleInstantCheckout}
+                    disabled={isInstantCheckingOut}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-8 py-3.5 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer w-full max-w-[320px] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isInstantCheckingOut ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Redirecionando...
+                      </>
+                    ) : (
+                      "Comece o teste gratuito em 7 dias."
+                    )}
+                  </button>
+                  <span className="text-[11px] text-gray-400 font-medium">Cancele a qualquer momento.</span>
+                </div>
+              </div>
+
+              {/* Sub-Header Comparison */}
+              <div className="mt-4">
+                <h2 className="text-sm font-bold text-gray-800 tracking-tight">Funcionalidades e condições da assinatura:</h2>
+              </div>
+
+              {/* Comparison Table */}
+              <div className="w-full bg-white border border-gray-100 rounded-2xl shadow-[0_4px_25px_rgba(0,0,0,0.01)] overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse">
+                    <thead>
+                      <tr className="bg-gray-50/50 border-b border-gray-100 text-left">
+                        <th className="px-6 py-4 text-xs font-bold text-gray-500 w-1/3">Funções principais</th>
+                        <th className="px-6 py-4 text-xs font-bold text-gray-800 w-1/3 text-center">Teste gratuito de 7 dias</th>
+                        <th className="px-6 py-4 text-xs font-bold text-gray-800 w-1/3 text-center">Assinatura mensal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 text-xs font-semibold text-gray-600">
+                      {/* Preço */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Preço e renovação</td>
+                        <td className="px-6 py-4 text-center text-[11px] font-medium text-gray-500">
+                          R$ 5,00 <span className="text-[10px] text-gray-400">(Renovação automática por R$ 150,00/mês)</span>
+                        </td>
+                        <td className="px-6 py-4 text-center text-gray-800 font-bold">R$ 150,00 por mês</td>
+                      </tr>
+
+                      {/* Envio */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Envio de arquivo</td>
+                        <td className="px-6 py-4 text-center text-gray-500 font-semibold">Máximo de 5 arquivos por dia</td>
+                        <td className="px-6 py-4 text-center text-indigo-600 font-bold">Ilimitado</td>
+                      </tr>
+
+                      {/* Tamanho */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Tamanho máximo do arquivo</td>
+                        <td className="px-6 py-4 text-center text-gray-500 font-semibold">Até 2 GB</td>
+                        <td className="px-6 py-4 text-center text-gray-800 font-bold">Até 5 GB</td>
+                      </tr>
+
+                      {/* Armazenar */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Armazenar</td>
+                        <td className="px-6 py-4 text-center text-red-500/80 font-bold">Apenas por 24 horas.</td>
+                        <td className="px-6 py-4 text-center text-gray-800 font-bold">Durante 7 dias</td>
+                      </tr>
+
+                      {/* Pastas */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Organização em pastas</td>
+                        <td className="px-6 py-4 text-center text-gray-400 font-medium">Não incluído</td>
+                        <td className="px-6 py-4 text-center text-gray-800 font-bold">Incluindo</td>
+                      </tr>
+
+                      {/* Colaboradores */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Colaboradores</td>
+                        <td className="px-6 py-4 text-center text-gray-400 font-medium">Não incluído</td>
+                        <td className="px-6 py-4 text-center text-gray-800 font-bold">Acesso para toda a equipe</td>
+                      </tr>
+
+                      {/* Idiomas */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Mais de 99 idiomas disponíveis</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Download Formats */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Faça o download em DOCX, PDF, TXT ou SRT.</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Envio em Massa */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Envio de arquivos em massa</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Edição */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Edição de transcrição</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Timestamps */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Carimbos de data/hora opcionais</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Speakers */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Identificação do falante</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Resumo */}
+                      <tr className="hover:bg-gray-50/30 transition-colors">
+                        <td className="px-6 py-4 text-gray-700 font-bold">Resumo da transcrição</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex w-5 h-5 bg-indigo-600 rounded-full items-center justify-center text-white shadow-sm">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 3: USUÁRIOS (TEAM MEMBERS) */}
+          {activeTab === "users" && (
+            <div className="w-full max-w-4xl mx-auto flex flex-col gap-4 text-left animate-[fadeIn_0.2s_ease-out]">
+              
+              {/* Header with Add User Button */}
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                <h1 className="text-xl font-bold text-gray-900 tracking-tight">Usuários</h1>
+                
+                <button 
+                  onClick={() => setShowInviteModal(true)}
+                  className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
+                >
+                  <span className="text-sm font-bold leading-none">+</span>
+                  <span>Adicionar usuário</span>
+                </button>
+              </div>
+
+              {/* Members Table Card */}
+              <div className="bg-white border border-gray-100 rounded-3xl shadow-[0_8px_30px_rgba(0,0,0,0.02)] overflow-hidden p-6 mt-2">
+                {isLoadingMembers ? (
+                  <div className="p-12 flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                    <span className="text-xs text-gray-500 font-medium">Carregando membros...</span>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="text-left">
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-4">Nome</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-4">Papel</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-4">Pastas</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-4">Criado</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-4">Último acesso</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-4">Estado</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-4 text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {workspaceMembers.map(member => (
+                          <tr key={member.id} className="hover:bg-gray-50/30 transition-colors">
+                            {/* Nome (Email) */}
+                            <td className="px-6 py-4 whitespace-nowrap text-xs font-bold text-gray-700">
+                              {member.email}
+                            </td>
+                            {/* Papel */}
+                            <td className="px-6 py-4 whitespace-nowrap text-xs font-semibold text-gray-500">
+                              {member.role === "admin" ? "Administrador" : "Colaborador"}
+                            </td>
+                            {/* Pastas */}
+                            <td className="px-6 py-4 whitespace-nowrap text-xs font-semibold text-gray-500">
+                              <span className="flex items-center gap-1">
+                                <span>📁</span> Todas as pastas
+                              </span>
+                            </td>
+                            {/* Criado */}
+                            <td className="px-6 py-4 whitespace-nowrap text-xs font-semibold text-gray-500">
+                              {formatPortugueseDate(member.created_at)}
+                            </td>
+                            {/* Último Acesso */}
+                            <td className="px-6 py-4 whitespace-nowrap text-xs font-semibold text-gray-500">
+                              {formatPortugueseDate(member.created_at)}
+                            </td>
+                            {/* Estado (Pill) */}
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className="inline-flex border border-green-200 bg-green-50/35 text-green-600 px-3 py-1 rounded-full text-[10px] font-bold">
+                                Ativo
+                              </span>
+                            </td>
+                            {/* Actions */}
+                            <td className="px-6 py-4 whitespace-nowrap text-right text-xs">
+                              {member.role !== "admin" ? (
+                                <button 
+                                  onClick={() => handleRemoveMember(member.id)}
+                                  className="text-red-500 hover:text-red-700 font-bold hover:bg-red-50 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  Remover
+                                </button>
+                              ) : (
+                                <span className="text-[10px] text-gray-400 font-semibold italic">Proprietário</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {workspaceMembers.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="px-6 py-12 text-center text-xs text-gray-400 font-medium">
+                              Nenhum usuário cadastrado neste workspace.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 4: CONFIGURAÇÕES (SETTINGS) */}
+          {activeTab === "settings" && (
+            <div className="w-full max-w-4xl mx-auto flex flex-col text-left animate-[fadeIn_0.2s_ease-out]">
+              
+              {/* Settings Header */}
+              <h1 className="text-xl font-bold text-gray-900 tracking-tight mb-4">Configurações</h1>
+
+              {/* Subtabs Selector */}
+              <div className="flex gap-6 border-b border-gray-100 pb-0 mb-4 w-full">
+                <button 
+                  onClick={() => setSettingsSubTab("gerais")}
+                  className={`text-xs font-bold pb-2.5 transition-all outline-none cursor-pointer border-b-2 ${
+                    settingsSubTab === "gerais" 
+                      ? "text-indigo-600 border-indigo-600" 
+                      : "text-gray-400 border-transparent hover:text-gray-600"
+                  }`}
+                >
+                  Informações gerais
+                </button>
+                <button 
+                  onClick={() => setSettingsSubTab("fiscais")}
+                  className={`text-xs font-bold pb-2.5 transition-all outline-none cursor-pointer border-b-2 ${
+                    settingsSubTab === "fiscais" 
+                      ? "text-indigo-600 border-indigo-600" 
+                      : "text-gray-400 border-transparent hover:text-gray-600"
+                  }`}
+                >
+                  Informações fiscais
+                </button>
+              </div>
+
+              {/* Success alert banner */}
+              {settingsSuccess ? (
+                <div className="w-full bg-green-50 border border-green-100 text-green-700 text-xs font-bold p-4 rounded-xl shadow-sm mb-4">
+                  {settingsSuccess}
+                </div>
+              ) : (
+                <div className="w-full bg-indigo-50/40 text-indigo-600 text-[10px] font-bold px-4 py-2 rounded-xl mb-4">
+                  Atualizado em 24 de maio de 2026
+                </div>
+              )}
+
+              {/* Big White Card containing settings forms */}
+              <div className="w-full bg-white border border-gray-100 rounded-3xl shadow-[0_8px_30px_rgba(0,0,0,0.02)] p-8 flex flex-col">
+                
+                {/* SUBTAB 4A: INFORMAÇÕES GERAIS */}
+                {settingsSubTab === "gerais" && (
+                  <div className="divide-y divide-gray-100">
+                    
+                    {/* Section 1: Informações de contato */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-6 first:pt-0">
+                      <div className="md:col-span-1">
+                        <h3 className="text-xs font-bold text-gray-900">Informações de contato</h3>
+                        <p className="text-[11px] text-gray-400 font-semibold leading-relaxed mt-1">
+                          Gerencie e atualize suas informações pessoais com facilidade.
+                        </p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <form onSubmit={handleSaveContactInfo} className="flex flex-col gap-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Nome</label>
+                              <input 
+                                type="text"
+                                required
+                                value={profileFirstName}
+                                onChange={(e) => setProfileFirstName(e.target.value)}
+                                placeholder="Nome"
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Sobrenome</label>
+                              <input 
+                                type="text"
+                                required
+                                value={profileLastName}
+                                onChange={(e) => setProfileLastName(e.target.value)}
+                                placeholder="Sobrenome"
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">E-mail</label>
+                            <input 
+                              type="email"
+                              disabled
+                              value={user?.email || ""}
+                              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-xs font-semibold text-gray-400 outline-none cursor-not-allowed"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Telefone</label>
+                            <div className="grid grid-cols-4 gap-4">
+                              <div className="col-span-1">
+                                <input 
+                                  type="text"
+                                  value={profilePhoneArea}
+                                  onChange={(e) => setProfilePhoneArea(e.target.value)}
+                                  placeholder="Ex. 34"
+                                  className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all text-center"
+                                />
+                              </div>
+                              <div className="col-span-3">
+                                <input 
+                                  type="text"
+                                  value={profilePhoneNumber}
+                                  onChange={(e) => setProfilePhoneNumber(e.target.value)}
+                                  placeholder="Exemplo: 6555123"
+                                  className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end mt-2">
+                            <button 
+                              type="submit"
+                              disabled={isUpdatingSettings}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                            >
+                              {isUpdatingSettings ? "Salvando..." : "Salvar"}
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+
+                    {/* Section 2: Senha */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-6">
+                      <div className="md:col-span-1">
+                        <h3 className="text-xs font-bold text-gray-900">Senha</h3>
+                        <p className="text-[11px] text-gray-400 font-semibold leading-relaxed mt-1">
+                          Altere sua senha para manter sua conta segura. Recomenda-se o uso de uma senha forte e exclusiva.
+                        </p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <form onSubmit={handleSavePassword} className="flex flex-col gap-4">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Senha</label>
+                            <input 
+                              type="password"
+                              required
+                              value={profilePassword}
+                              onChange={(e) => setProfilePassword(e.target.value)}
+                              placeholder="********"
+                              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                            />
+                          </div>
+
+                          <div className="flex justify-end mt-2">
+                            <button 
+                              type="submit"
+                              disabled={isUpdatingSettings}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                            >
+                              {isUpdatingSettings ? "Salvando..." : "Salvar"}
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+
+                    {/* Section 3: Linguagem */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-6">
+                      <div className="md:col-span-1">
+                        <h3 className="text-xs font-bold text-gray-900">Linguagem</h3>
+                        <p className="text-[11px] text-gray-400 font-semibold leading-relaxed mt-1">
+                          Selecione o idioma de sua preferência para personalizar sua experiência na plataforma.
+                        </p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <form onSubmit={handleSaveLanguage} className="flex flex-col gap-4">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Linguagem</label>
+                            <div className="relative">
+                              <select 
+                                value={profileLanguage}
+                                onChange={(e) => setProfileLanguage(e.target.value)}
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all appearance-none cursor-pointer"
+                              >
+                                <option value="en">Inglês</option>
+                                <option value="pt">Português</option>
+                                <option value="es">Espanhol</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end mt-2">
+                            <button 
+                              type="submit"
+                              disabled={isUpdatingSettings}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                            >
+                              {isUpdatingSettings ? "Salvando..." : "Salvar"}
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+
+                    {/* Section 4: Fuso horário */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-6">
+                      <div className="md:col-span-1">
+                        <h3 className="text-xs font-bold text-gray-900">Fuso horário</h3>
+                        <p className="text-[11px] text-gray-400 font-semibold leading-relaxed mt-1">
+                          Por favor, selecione seu fuso horário para que as datas e horas sejam exibidas corretamente de acordo com sua localização.
+                        </p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <form onSubmit={handleSaveTimezone} className="flex flex-col gap-4">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Fuso horário</label>
+                            <div className="relative">
+                              <select 
+                                value={profileTimezone}
+                                onChange={(e) => setProfileTimezone(e.target.value)}
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all appearance-none cursor-pointer"
+                              >
+                                <option value="GMT+01:00">(GMT+01:00) Bruxelas, Copenhague, Madri, Paris</option>
+                                <option value="GMT-03:00">(GMT-03:00) Brasília, São Paulo, Rio de Janeiro</option>
+                                <option value="GMT+00:00">(GMT+00:00) Londres, Dublin, Lisboa</option>
+                                <option value="GMT-05:00">(GMT-05:00) Eastern Time (US & Canada)</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end mt-2">
+                            <button 
+                              type="submit"
+                              disabled={isUpdatingSettings}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                            >
+                              {isUpdatingSettings ? "Salvando..." : "Salvar"}
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+
+                    {/* Section 5: Data e hora */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-6 border-b border-gray-100">
+                      <div className="md:col-span-1">
+                        <h3 className="text-xs font-bold text-gray-900">Data e hora</h3>
+                        <p className="text-[11px] text-gray-400 font-semibold leading-relaxed mt-1">
+                          Configure o formato em que prefere exibir datas e horas na plataforma.
+                        </p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <form onSubmit={handleSaveDateTimeFormat} className="flex flex-col gap-4">
+                          <div className="grid grid-cols-2 gap-6">
+                            
+                            {/* Date Format Radios */}
+                            <div>
+                              <span className="block text-[10px] font-bold text-gray-400 mb-2.5">Formato de data</span>
+                              <div className="flex flex-col gap-2">
+                                <label className="inline-flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                    type="radio" 
+                                    name="dateFormat"
+                                    checked={profileDateFormat === "DD-MM-AAAA"}
+                                    onChange={() => setProfileDateFormat("DD-MM-AAAA")}
+                                    className="w-3.5 h-3.5 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                                  />
+                                  <span className="text-xs font-semibold text-gray-700">DD-MM-AAAA</span>
+                                </label>
+                                <label className="inline-flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                    type="radio" 
+                                    name="dateFormat"
+                                    checked={profileDateFormat === "MM-DD-AAAA"}
+                                    onChange={() => setProfileDateFormat("MM-DD-AAAA")}
+                                    className="w-3.5 h-3.5 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                                  />
+                                  <span className="text-xs font-semibold text-gray-700">MM-DD-AAAA</span>
+                                </label>
+                              </div>
+                            </div>
+
+                            {/* Time Format Radios */}
+                            <div>
+                              <span className="block text-[10px] font-bold text-gray-400 mb-2.5">Formato de tempo</span>
+                              <div className="flex flex-col gap-2">
+                                <label className="inline-flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                    type="radio" 
+                                    name="timeFormat"
+                                    checked={profileTimeFormat === "24"}
+                                    onChange={() => setProfileTimeFormat("24")}
+                                    className="w-3.5 h-3.5 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                                  />
+                                  <span className="text-xs font-semibold text-gray-700">24</span>
+                                </label>
+                                <label className="inline-flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                    type="radio" 
+                                    name="timeFormat"
+                                    checked={profileTimeFormat === "12"}
+                                    onChange={() => setProfileTimeFormat("12")}
+                                    className="w-3.5 h-3.5 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                                  />
+                                  <span className="text-xs font-semibold text-gray-700">12</span>
+                                </label>
+                              </div>
+                            </div>
+
+                          </div>
+
+                          <div className="flex justify-end mt-2">
+                            <button 
+                              type="submit"
+                              disabled={isUpdatingSettings}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                            >
+                              {isUpdatingSettings ? "Salvando..." : "Salvar"}
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+
+                    {/* Section 6: Status da conta */}
+                    <div className="py-6 last:pb-0 flex flex-col gap-4">
+                      <div>
+                        <h3 className="text-xs font-bold text-gray-900">Status da conta</h3>
+                        <p className="text-[11px] text-gray-400 font-semibold leading-relaxed mt-1">
+                          Se desejar encerrar sua conta permanentemente, você pode fazê-lo aqui.
+                        </p>
+                      </div>
+                      
+                      <div className="border-t border-gray-100/80 my-2"></div>
+                      
+                      <div className="flex justify-end">
+                        <button 
+                          onClick={handleDeleteAccount}
+                          className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-6 py-2.5 rounded-xl transition-all shadow-md shadow-red-500/10 cursor-pointer"
+                        >
+                          Excluir conta
+                        </button>
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+
+                {/* SUBTAB 4B: INFORMAÇÕES FISCAIS */}
+                {settingsSubTab === "fiscais" && (
+                  <div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      
+                      {/* Left Header info */}
+                      <div className="md:col-span-1">
+                        <h3 className="text-xs font-bold text-gray-900">Informações de contato</h3>
+                        <p className="text-[11px] text-gray-400 font-semibold leading-relaxed mt-1">
+                          Gerencie e atualize suas informações pessoais com facilidade.
+                        </p>
+                      </div>
+
+                      {/* Right Form Inputs matching Mockup 4 */}
+                      <div className="md:col-span-2">
+                        <form onSubmit={handleSaveFiscalInfo} className="flex flex-col gap-4">
+                          
+                          {/* Tipo (Pills Toggle) */}
+                          <div>
+                            <span className="block text-[10px] font-bold text-gray-400 mb-1.5">Tipo</span>
+                            <div className="flex gap-2 w-fit bg-gray-50 border border-gray-100 rounded-xl p-1">
+                              <button
+                                type="button"
+                                onClick={() => setFiscalType("empresa")}
+                                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                  fiscalType === "empresa"
+                                    ? "bg-white text-indigo-600 shadow-sm border border-gray-100"
+                                    : "text-gray-500 hover:text-gray-800 border border-transparent"
+                                }`}
+                              >
+                                Empresa
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setFiscalType("privado")}
+                                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                  fiscalType === "privado"
+                                    ? "bg-white text-indigo-600 shadow-sm border border-gray-100"
+                                    : "text-gray-500 hover:text-gray-800 border border-transparent"
+                                }`}
+                              >
+                                Privado
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Nome da Empresa */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">
+                              Nome da empresa *
+                            </label>
+                            <input 
+                              type="text"
+                              required
+                              value={fiscalCompanyName}
+                              onChange={(e) => setFiscalCompanyName(e.target.value)}
+                              placeholder="Por exemplo, minha empresa"
+                              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                            />
+                          </div>
+
+                          {/* País */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">País *</label>
+                            <div className="relative">
+                              <select 
+                                value={fiscalCountry}
+                                onChange={(e) => setFiscalCountry(e.target.value)}
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all appearance-none cursor-pointer"
+                              >
+                                <option value="Brasil">Brasil</option>
+                                <option value="Portugal">Portugal</option>
+                                <option value="Estados Unidos">Estados Unidos</option>
+                                <option value="Espanha">Espanha</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          </div>
+
+                          {/* NIF */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">
+                              Número de Identificação Fiscal
+                            </label>
+                            <div className="relative">
+                              <input 
+                                type="text"
+                                value={fiscalNif}
+                                onChange={(e) => setFiscalNif(e.target.value)}
+                                placeholder="Exemplo 52464690B"
+                                className="w-full pl-4 pr-10 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                              />
+                              <span title="Identificação fiscal internacional ou CNPJ/CPF" className="absolute right-3.5 top-1/2 -translate-y-1/2 cursor-help">
+                                <HelpCircle className="w-4 h-4 text-gray-400" />
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Nome / Sobrenome */}
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Nome *</label>
+                              <input 
+                                type="text"
+                                required
+                                value={fiscalFirstName}
+                                onChange={(e) => setFiscalFirstName(e.target.value)}
+                                placeholder="Exemplo: Maria"
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Sobrenome *</label>
+                              <input 
+                                type="text"
+                                required
+                                value={fiscalLastName}
+                                onChange={(e) => setFiscalLastName(e.target.value)}
+                                placeholder="Eg Smith"
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Endereço */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Endereço *</label>
+                            <input 
+                              type="text"
+                              required
+                              value={fiscalAddress}
+                              onChange={(e) => setFiscalAddress(e.target.value)}
+                              placeholder="Exemplo: Rua Principal"
+                              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                            />
+                          </div>
+
+                          {/* Código Postal / Cidade */}
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Código Postal *</label>
+                              <input 
+                                type="text"
+                                required
+                                value={fiscalPostalCode}
+                                onChange={(e) => setFiscalPostalCode(e.target.value)}
+                                placeholder="Exemplo 28028"
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Cidade *</label>
+                              <input 
+                                type="text"
+                                required
+                                value={fiscalCity}
+                                onChange={(e) => setFiscalCity(e.target.value)}
+                                placeholder="Exemplo: Londres"
+                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                              />
+                            </div>
+                          </div>
+
+                          {/* E-mail */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-400 mb-1.5">E-mail *</label>
+                            <input 
+                              type="email"
+                              required
+                              value={fiscalEmail}
+                              onChange={(e) => setFiscalEmail(e.target.value)}
+                              placeholder="marcusrodrigo2@gmail.com"
+                              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                            />
+                          </div>
+
+                          {/* Save Button */}
+                          <div className="flex justify-end mt-4">
+                            <button 
+                              type="submit"
+                              disabled={isUpdatingSettings}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                            >
+                              {isUpdatingSettings ? "Salvando..." : "Salvar"}
+                            </button>
+                          </div>
+
+                        </form>
+                      </div>
+
+                    </div>
+                  </div>
+                )}
+
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 5: CONTATE-NOS (CONTACT US) */}
+          {activeTab === "contact" && (
+            <div className="w-full max-w-2xl mx-auto flex flex-col gap-6 text-left">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Fale com o Suporte</h1>
+                <p className="text-xs text-gray-500 font-medium">Tem alguma dúvida ou sugestão? Envie uma mensagem diretamente ao nosso suporte.</p>
+              </div>
+
+              {supportSuccess && (
+                <div className="w-full bg-green-50 border border-green-100 text-green-700 text-xs font-bold p-4 rounded-xl shadow-sm">
+                  {supportSuccess}
+                </div>
+              )}
+
+              <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+                <form onSubmit={handleSendSupportTicket} className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-2">Assunto</label>
+                    <input 
+                      type="text"
+                      required
+                      value={supportSubject}
+                      onChange={(e) => setSupportSubject(e.target.value)}
+                      placeholder="Ex: Problema com transcrição de áudio"
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-2">Mensagem</label>
+                    <textarea 
+                      required
+                      rows={5}
+                      value={supportMessage}
+                      onChange={(e) => setSupportMessage(e.target.value)}
+                      placeholder="Descreva detalhadamente a sua dúvida ou o problema encontrado..."
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all resize-none"
+                    ></textarea>
+                  </div>
+                  <div className="flex justify-end mt-2">
+                    <button 
+                      type="submit"
+                      disabled={isSendingSupport}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                    >
+                      {isSendingSupport ? "Enviando..." : "Enviar Mensagem"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+        </main>
+
+        {/* MODAL: CONVIDAR MEMBRO DA EQUIPE */}
+        {showInviteModal && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center animate-[fadeIn_0.2s_ease-out]">
+            <div className="bg-white rounded-3xl w-full max-w-[420px] p-6 shadow-2xl border border-gray-100 text-left">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-sm font-bold text-gray-900">Convidar Novo Membro</h3>
+                <button 
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setInviteError(null);
+                  }}
+                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {inviteError && (
+                <div className="mb-4 bg-red-50 border border-red-100 text-red-600 text-xs font-bold p-3 rounded-xl">
+                  {inviteError}
+                </div>
+              )}
+
+              <form onSubmit={handleInviteMember} className="flex flex-col gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-2">E-mail do Membro</label>
+                  <input 
+                    type="email"
+                    required
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    placeholder="Ex: colega@empresa.com"
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-2">Função na Equipe</label>
+                  <div className="relative">
+                    <select 
+                      value={inviteRole}
+                      onChange={(e) => setInviteRole(e.target.value)}
+                      className="w-full appearance-none bg-gray-50 border border-gray-100 text-xs font-bold text-gray-700 rounded-xl px-4 py-3 outline-none focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all min-h-[44px]"
+                    >
+                      <option value="member">Membro (Somente leitura e transcrição)</option>
+                      <option value="admin">Administrador (Gerenciamento e Faturamento)</option>
+                    </select>
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 justify-end mt-4">
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setShowInviteModal(false);
+                      setInviteError(null);
+                    }}
+                    className="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-50 rounded-xl transition cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    type="submit" 
+                    disabled={isInvitingMember || !inviteEmail.trim()}
+                    className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {isInvitingMember && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Convidar
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: CRIAR NOVA TRANSCRIÇÃO (+ Criar Novo) */}
+        {showUploadModal && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center animate-[fadeIn_0.2s_ease-out]">
+            <div className="bg-white rounded-3xl w-full max-w-[540px] p-6 shadow-2xl border border-gray-100 text-left max-h-[90vh] overflow-y-auto custom-scrollbar">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-sm font-bold text-gray-900">Nova Transcrição</h3>
+                <button 
+                  onClick={() => {
+                    setShowUploadModal(false);
+                    setFile(null);
+                    setUrl("");
+                  }}
+                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Tab Selector */}
+              <div className="flex bg-gray-100/80 p-1.5 rounded-2xl mb-6">
+                <button
+                  onClick={() => setTab("local")}
+                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs transition-all duration-200 min-h-[40px] cursor-pointer ${
+                    tab === "local" 
+                      ? "bg-white text-indigo-600 shadow-[0_2px_8px_rgb(0,0,0,0.04)]" 
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  <CloudUpload className="w-4 h-4" />
+                  Arquivo local
+                </button>
+                <button
+                  onClick={() => setTab("online")}
+                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs transition-all duration-200 min-h-[40px] cursor-pointer ${
+                    tab === "online" 
+                      ? "bg-white text-indigo-600 shadow-[0_2px_8px_rgb(0,0,0,0.04)]" 
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  <LinkIcon className="w-4 h-4" />
+                  Arquivo online
+                </button>
+              </div>
+
+              {/* Upload Area / Attached File Info */}
+              {tab === "local" ? (
+                file ? (
+                  <div className="w-full bg-[#F8FAFF] border border-indigo-100 rounded-xl p-4 flex items-center justify-between gap-3 mb-6 animate-[fadeIn_0.2s_ease-out]">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center shrink-0">
+                        <FileAudio className="w-5 h-5 animate-pulse" />
+                      </div>
+                      <div className="min-w-0 text-left">
+                        <p className="text-xs font-bold text-gray-900 truncate">{file.name}</p>
+                        <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-widest mt-0.5">
+                          {file.size ? (file.size / (1024 * 1024)).toFixed(2) + " MB" : "Arquivo anexado"}
+                        </p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFile(null);
+                      }}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full border border-dashed border-indigo-200 bg-[#F8FAFF] rounded-xl flex flex-col items-center justify-center py-10 cursor-pointer hover:bg-indigo-50/50 transition-colors mb-6 group min-h-[140px]"
+                  >
+                    <input 
+                      type="file" 
+                      ref={fileInputRef}
+                      onChange={(e) => {
+                        handleFileUpload(e);
+                      }}
+                      className="hidden"
+                      accept="audio/*,video/*"
+                    />
+                    <div className="w-10 h-10 bg-indigo-100 text-indigo-500 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform shadow-sm">
+                      <CloudUpload className="w-5 h-5" />
+                    </div>
+                    <p className="text-xs font-semibold text-gray-500">
+                      Clique para anexar arquivo ou arraste e solte
+                    </p>
+                  </div>
+                )
+              ) : (
+                <div className="w-full mb-6">
+                  <div className="mb-4">
+                    <label className="block text-xs font-bold text-gray-700 mb-2">URL do Vídeo ou Áudio</label>
+                    <div className="relative flex items-center h-[48px]">
+                      <Link2 className="absolute left-4 w-4 h-4 text-gray-400 z-10" />
+                      <input 
+                        type="url" 
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        className="w-full h-full bg-white border border-indigo-100 text-gray-700 text-xs rounded-xl pl-11 pr-4 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100/50 transition-all font-semibold shadow-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Idioma */}
+              <div className="mb-4">
+                <label className="block text-xs font-bold text-gray-700 mb-2">Idioma</label>
+                <div className="relative">
+                  <select 
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    className="w-full appearance-none bg-gray-50 border border-gray-100 text-gray-700 text-xs rounded-xl px-4 py-3 outline-none focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all font-semibold min-h-[44px]"
+                  >
+                    <option value="pt">🇧🇷 Português</option>
+                    <option value="en">🇺🇸 Inglês</option>
+                    <option value="es">🇪🇸 Espanhol</option>
+                  </select>
+                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Pasta (Opcional) */}
+              <div className="mb-4">
+                <label className="block text-xs font-bold text-gray-700 mb-2">Salvar na pasta (Opcional)</label>
+                <div className="relative">
+                  <select 
+                    value={selectedFolderUploadId}
+                    onChange={(e) => setSelectedFolderUploadId(e.target.value)}
+                    className="w-full appearance-none bg-gray-50 border border-gray-100 text-gray-700 text-xs rounded-xl px-4 py-3 outline-none focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all font-semibold min-h-[44px]"
+                  >
+                    <option value="">📁 Nível Raiz (Sem pasta)</option>
+                    {folders.map(f => (
+                      <option key={f.id} value={f.id}>📁 {f.name}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Modo de Transcrição */}
+              <div className="mb-4">
+                <label className="block text-xs font-bold text-gray-700 mb-2">Modo de transcrição</label>
+                <div className="flex bg-gray-50/80 p-1 rounded-2xl w-full border border-gray-100/50">
+                  {/* Rapido */}
+                  <button 
+                    onClick={() => setTranscribeMode("rapido")}
+                    className={`flex-1 flex flex-col items-center justify-center text-center py-2.5 px-2 rounded-xl min-h-[70px] transition-all duration-200 ${
+                      transcribeMode === "rapido" 
+                        ? "bg-white shadow-[0_2px_8px_rgb(0,0,0,0.06)]" 
+                        : "hover:bg-gray-100/50"
+                    }`}
+                  >
+                    <Zap className={`w-4 h-4 mb-1 ${transcribeMode === "rapido" ? "text-indigo-600" : "text-gray-400"}`} />
+                    <span className={`text-[11px] font-semibold ${transcribeMode === "rapido" ? "text-indigo-600" : "text-gray-700"}`}>
+                      Rápido
+                    </span>
+                    <span className="text-[9px] text-gray-400 mt-0.5">(Menos preciso)</span>
+                  </button>
+
+                  {/* Equilibrado */}
+                  <button 
+                    onClick={() => setTranscribeMode("equilibrado")}
+                    className={`flex-1 flex flex-col items-center justify-center text-center py-2.5 px-2 rounded-xl min-h-[70px] transition-all duration-200 mx-1 ${
+                      transcribeMode === "equilibrado" 
+                        ? "bg-white shadow-[0_2px_8px_rgb(0,0,0,0.06)]" 
+                        : "hover:bg-gray-100/50"
+                    }`}
+                  >
+                    <Settings2 className={`w-4 h-4 mb-1 ${transcribeMode === "equilibrado" ? "text-indigo-600" : "text-gray-400"}`} />
+                    <span className={`text-[11px] font-semibold ${transcribeMode === "equilibrado" ? "text-indigo-600" : "text-gray-700"}`}>
+                      Equilibrado
+                    </span>
+                    <span className="text-[9px] text-gray-400 mt-0.5">(Médio)</span>
+                  </button>
+
+                  {/* Preciso */}
+                  <button 
+                    onClick={() => setTranscribeMode("preciso")}
+                    className={`flex-1 flex flex-col items-center justify-center text-center py-2.5 px-2 rounded-xl min-h-[70px] transition-all duration-200 ${
+                      transcribeMode === "preciso" 
+                        ? "bg-white shadow-[0_2px_8px_rgb(0,0,0,0.06)]" 
+                        : "hover:bg-gray-100/50"
+                    }`}
+                  >
+                    <Target className={`w-4 h-4 mb-1 ${transcribeMode === "preciso" ? "text-indigo-600" : "text-gray-400"}`} />
+                    <span className={`text-[11px] font-semibold ${transcribeMode === "preciso" ? "text-indigo-600" : "text-gray-700"}`}>
+                      Preciso
+                    </span>
+                    <span className="text-[9px] text-gray-400 mt-0.5">(Mais lento)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Opções Avançadas */}
+              <div className="mb-2">
+                <button 
+                  onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
+                  className={`flex items-center gap-1.5 text-xs font-[600] transition-colors ${isAdvancedOpen ? "text-indigo-500" : "text-gray-700 hover:text-gray-900"}`}
+                >
+                  Opções avançadas
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isAdvancedOpen ? "rotate-180 text-indigo-500" : "text-gray-400"}`} />
+                </button>
+
+                {isAdvancedOpen && (
+                  <div className="mt-4 flex flex-col gap-4 pl-1 animate-[fadeIn_0.2s_ease-out]">
+                    {/* Reconhecer falantes */}
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <div className="relative flex items-center justify-center mt-0.5 min-w-[18px] min-h-[18px]">
+                        <input 
+                          type="checkbox" 
+                          className="appearance-none w-[18px] h-[18px] border border-gray-200 rounded-[5px] checked:bg-indigo-600 checked:border-indigo-600 transition-colors peer cursor-pointer"
+                          checked={recognizeSpeakers}
+                          onChange={(e) => setRecognizeSpeakers(e.target.checked)}
+                        />
+                        <Check className="absolute w-3 h-3 text-white opacity-0 peer-checked:opacity-100 pointer-events-none" strokeWidth={3} />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="text-xs font-[600] text-gray-800">Reconhecer falantes</span>
+                        <span className="text-[10px] text-gray-400 font-medium mt-0.5">Identifica automaticamente cada pessoa no áudio.</span>
+                      </div>
+                    </label>
+
+                    {/* Traduzir para outro idioma */}
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <div className="relative flex items-center justify-center mt-0.5 min-w-[18px] min-h-[18px]">
+                        <input 
+                          type="checkbox" 
+                          className="appearance-none w-[18px] h-[18px] border border-gray-200 rounded-[5px] checked:bg-indigo-600 checked:border-indigo-600 transition-colors peer cursor-pointer"
+                          checked={translateAudio}
+                          onChange={(e) => setTranslateAudio(e.target.checked)}
+                        />
+                        <Check className="absolute w-3 h-3 text-white opacity-0 peer-checked:opacity-100 pointer-events-none" strokeWidth={3} />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="text-xs font-[600] text-gray-800">Traduzir para Inglês</span>
+                        <span className="text-[10px] text-gray-400 font-medium mt-0.5">Gera a transcrição diretamente traduzida para inglês.</span>
+                      </div>
+                    </label>
+
+                    {/* Restaurar áudio */}
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <div className="relative flex items-center justify-center mt-0.5 min-w-[18px] min-h-[18px]">
+                        <input 
+                          type="checkbox" 
+                          className="appearance-none w-[18px] h-[18px] border border-gray-200 rounded-[5px] checked:bg-indigo-600 checked:border-indigo-600 transition-colors peer cursor-pointer"
+                          checked={restoreAudio}
+                          onChange={(e) => setRestoreAudio(e.target.checked)}
+                        />
+                        <Check className="absolute w-3 h-3 text-white opacity-0 peer-checked:opacity-100 pointer-events-none" strokeWidth={3} />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="text-xs font-[600] text-gray-800">Restaurar áudio</span>
+                        <span className="text-[10px] text-gray-400 font-medium mt-0.5">Remove ruído de fundo e melhora a nitidez das vozes.</span>
+                      </div>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-end gap-3 pt-5 border-t border-gray-100 mt-6">
+                <button
+                  onClick={() => {
+                    setShowUploadModal(false);
+                    setFile(null);
+                    setUrl("");
+                  }}
+                  className="px-5 py-2.5 text-xs font-bold text-gray-500 hover:bg-gray-50 rounded-xl transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    startTranscription();
+                    setShowUploadModal(false);
+                  }}
+                  disabled={((tab === "local" && !file) || (tab === "online" && !url)) || isTranscribing}
+                  className="px-6 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-md shadow-indigo-600/10 transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isTranscribing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Transcrevendo...
+                    </>
+                  ) : (
+                    "Transcrever"
+                  )}
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: CRIAR NOVA PASTA */}
+        {showCreateFolderModal && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center animate-[fadeIn_0.2s_ease-out]">
+            <div className="bg-white rounded-3xl w-full max-w-[400px] p-6 shadow-2xl border border-gray-100 text-left">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-sm font-bold text-gray-900">Nova Pasta</h3>
+                <button 
+                  onClick={() => setShowCreateFolderModal(false)}
+                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateFolder}>
+                <div className="mb-6">
+                  <label className="block text-xs font-semibold text-gray-700 mb-2">Nome da pasta</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    placeholder="Ex: Reuniões de Marketing"
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                  />
+                </div>
+
+                <div className="flex gap-3 justify-end">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowCreateFolderModal(false)}
+                    className="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-50 rounded-xl transition cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    type="submit" 
+                    disabled={isCreatingFolder || !newFolderName.trim()}
+                    className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {isCreatingFolder && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Criar Pasta
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans relative overflow-x-hidden">
       {/* Top Background Glow (from mockup) */}
@@ -561,7 +3154,7 @@ export default function HomePage() {
           <div className="w-8 h-8 bg-indigo-500 rounded-md flex items-center justify-center shadow-sm">
             <Mic className="w-5 h-5 text-white" />
           </div>
-          <span className="text-xl font-bold text-gray-900 tracking-tight">UPscribe</span>
+          <span className="text-xl font-bold text-gray-900 tracking-tight">Transcribe</span>
         </div>
 
         <nav className="hidden md:flex items-center gap-8">
@@ -571,13 +3164,16 @@ export default function HomePage() {
         </nav>
 
         <div className="flex items-center gap-3">
-          {subscriptionStatus === "active" ? (
+          {user ? (
             <>
               <button onClick={() => setViewMode("history")} className="text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors px-3 py-2">
                 Histórico
               </button>
               <button onClick={() => setViewMode("plan")} className="bg-gray-900 hover:bg-gray-800 text-white text-sm font-bold px-5 py-2.5 rounded-md transition-all shadow-sm">
                 Minha Conta
+              </button>
+              <button onClick={async () => { await supabase.auth.signOut(); setUser(null); }} className="text-sm font-bold text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 px-4 py-2.5 rounded-md transition-all shadow-sm">
+                Sair
               </button>
             </>
           ) : (
@@ -632,15 +3228,27 @@ export default function HomePage() {
                  <div className="p-2.5 bg-[#F6F8FF] text-indigo-600 rounded-xl">
                    <FileAudio className="w-5 h-5" />
                  </div>
-                 <div className="h-2 w-48 bg-gray-200 rounded-full overflow-hidden relative">
-                   <div className="absolute top-0 left-0 h-full w-1/2 bg-indigo-100 rounded-full animate-[pulse_2s_ease-in-out_infinite]"></div>
+                 <div className="flex flex-col gap-1 w-48">
+                   <div className="flex justify-between items-center text-[10px] text-gray-400 font-bold">
+                     <span>Progresso</span>
+                     <span>{Math.round(transcriptionProgress)}%</span>
+                   </div>
+                   <div className="h-2 bg-gray-100 rounded-full overflow-hidden relative">
+                     <div 
+                       className="absolute top-0 left-0 h-full bg-indigo-600 rounded-full transition-all duration-500 ease-out animate-[pulse_2s_infinite]" 
+                       style={{ width: `${transcriptionProgress}%` }}
+                     />
+                   </div>
                  </div>
               </div>
               <div className="flex items-center gap-4">
                  <div className="flex items-center gap-1.5 text-gray-400 text-sm font-medium">
                    <Clock className="w-4 h-4" />
                    <div className="h-2 w-12 bg-gray-200 rounded-full overflow-hidden relative">
-                     <div className="absolute top-0 left-0 h-full w-2/3 bg-gray-300 rounded-full"></div>
+                     <div 
+                       className="absolute top-0 left-0 h-full bg-gray-300 rounded-full transition-all duration-500"
+                       style={{ width: `${transcriptionProgress}%` }}
+                     />
                    </div>
                  </div>
                  <div className="px-3 py-1.5 flex items-center gap-1.5 bg-[#F8FAFF] text-indigo-600 rounded-full border border-indigo-100 text-[12px] font-[700]">
@@ -657,14 +3265,14 @@ export default function HomePage() {
             </div>
 
             <div className="flex flex-col items-center justify-center pt-8 pb-32">
-               <div className="w-[88px] h-[88px] bg-[#F8FAFF] rounded-full flex items-center justify-center mb-6 relative border-[6px] border-white shadow-[0_0_0_1px_rgba(99,102,241,0.05)]">
-                 <Mic className="w-8 h-8 text-indigo-600" />
-                 <div className="absolute top-1 -right-1 p-1.5 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.08)] border border-gray-50 flex items-center justify-center">
-                   <MessageSquare className="w-4 h-4 text-indigo-400" />
-                 </div>
+               <div className="w-[96px] h-[96px] bg-[#F8FAFF] rounded-full flex flex-col items-center justify-center mb-6 relative border-[6px] border-white shadow-[0_0_0_1px_rgba(99,102,241,0.1)]">
+                 <span className="text-lg font-extrabold text-indigo-600 tracking-tight">{Math.round(transcriptionProgress)}%</span>
+                 <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">Whisper</span>
                </div>
                <h3 className="text-[16px] font-bold text-gray-900 mb-2">Estamos processando sua transcrição...</h3>
-               <p className="text-[13px] font-medium text-gray-500">{jobStatus === "processing" ? "Processando..." : "Na fila"}</p>
+               <p className="text-[13px] font-medium text-gray-500">
+                 {jobStatus === "processing" ? "Extraindo áudio e transcrevendo..." : "Aguardando na fila de processamento..."}
+               </p>
             </div>
           </div>
         </div>
@@ -794,6 +3402,26 @@ export default function HomePage() {
             <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
           </div>
         </div>
+
+        {/* Pasta (Opcional) */}
+        {user && (
+          <div className="mb-8">
+            <label className="block text-[13px] font-semibold text-gray-700 mb-2">Salvar na pasta (Opcional)</label>
+            <div className="relative">
+              <select 
+                value={selectedFolderUploadId}
+                onChange={(e) => setSelectedFolderUploadId(e.target.value)}
+                className="w-full appearance-none bg-white border border-gray-200 text-gray-700 text-[14px] rounded-xl px-4 py-3.5 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all font-medium min-h-[48px]"
+              >
+                <option value="">📁 Nível Raiz (Sem pasta)</option>
+                {folders.map(f => (
+                  <option key={f.id} value={f.id}>📁 {f.name}</option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
+        )}
 
         {/* Modo de transcrição - Segmented Control Style */}
         <div className="mb-8">
@@ -965,95 +3593,184 @@ export default function HomePage() {
             </p>
           </div>
 
-          <div className="w-full bg-white rounded-[24px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 p-6 md:p-8">
-            {isLoadingHistory ? (
-              <div className="flex flex-col items-center justify-center py-20 gap-4">
-                <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-                <p className="text-sm font-medium text-gray-500">Carregando histórico...</p>
+          <div className="w-full bg-white rounded-[24px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 p-6 md:p-8 flex flex-col md:flex-row gap-8">
+            
+            {/* Left Sidebar: Folders */}
+            <div className="w-full md:w-[240px] shrink-0 md:border-r border-gray-100 pb-6 md:pb-0 md:pr-6 flex flex-col gap-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[12px] font-bold tracking-wider text-gray-400 uppercase">Pastas</span>
+                <button 
+                  onClick={() => setShowCreateFolderModal(true)} 
+                  className="p-1 text-indigo-600 hover:text-indigo-800 transition-colors"
+                  title="Criar Nova Pasta"
+                >
+                  <FolderPlus className="w-[18px] h-[18px]" />
+                </button>
               </div>
-            ) : historyJobs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <div className="w-16 h-16 bg-gray-50 text-gray-400 rounded-full flex items-center justify-center mb-4 border border-gray-100">
-                  <Clock className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-bold text-gray-900 mb-1">Nenhuma transcrição encontrada</h3>
-                <p className="text-sm text-gray-500 max-w-xs">Você ainda não enviou nenhum áudio ou vídeo para transcrição.</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {historyJobs.map((job) => {
-                  const date = new Date(job.created_at).toLocaleString('pt-BR');
-                  const isCompleted = job.status === "completed";
-                  const isFailed = job.status === "failed";
-                  const isProcessing = job.status === "processing";
-                  const isQueued = job.status === "queued";
 
-                  return (
-                    <div key={job.job_id} className="p-4 border border-gray-100 rounded-2xl hover:border-indigo-100 hover:bg-[#FDFEFF]/50 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="flex items-start gap-3">
-                        <div className={`p-2.5 rounded-xl shrink-0 ${
-                          isCompleted ? 'bg-green-50 text-green-600' :
-                          isFailed ? 'bg-red-50 text-red-600' :
-                          'bg-indigo-50 text-indigo-600'
-                        }`}>
-                          <FileAudio className="w-5 h-5" />
-                        </div>
-                        <div className="text-left">
-                          <h4 className="text-sm font-bold text-gray-900 max-w-[280px] sm:max-w-[400px] truncate" title={job.filename}>
-                            {job.filename || "Gravação de Áudio"}
-                          </h4>
-                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-400 font-medium">
-                            <span className="flex items-center gap-1">
-                              <Calendar className="w-3.5 h-3.5" />
-                              {date}
-                            </span>
-                            <span className="truncate max-w-[150px]" title={job.job_id}>ID: {job.job_id.substring(0, 8)}...</span>
+              <div className="flex flex-col gap-1.5 overflow-y-auto max-h-[300px] pr-2 custom-scrollbar">
+                {/* Todas */}
+                <button
+                  onClick={() => setSelectedFolderId("all")}
+                  className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left text-sm font-semibold transition-all ${
+                    selectedFolderId === "all"
+                      ? "bg-indigo-50 text-indigo-600 shadow-[0_2px_8px_rgba(99,102,241,0.04)]"
+                      : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  }`}
+                >
+                  <Folder className="w-4 h-4" />
+                  Todas as transcrições
+                </button>
+
+                {/* Sem pasta */}
+                <button
+                  onClick={() => setSelectedFolderId("root")}
+                  className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left text-sm font-semibold transition-all ${
+                    selectedFolderId === "root"
+                      ? "bg-indigo-50 text-indigo-600 shadow-[0_2px_8px_rgba(99,102,241,0.04)]"
+                      : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  }`}
+                >
+                  <Folder className="w-4 h-4 text-gray-400" />
+                  Nível Raiz (Sem pasta)
+                </button>
+
+                {/* List Folders */}
+                {folders.map((f) => (
+                  <div 
+                    key={f.id}
+                    className={`group flex items-center justify-between px-3 py-2 rounded-xl text-left text-sm font-semibold transition-all cursor-pointer ${
+                      selectedFolderId === f.id
+                        ? "bg-indigo-50 text-indigo-600"
+                        : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    }`}
+                    onClick={() => setSelectedFolderId(f.id)}
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      <Folder className={`w-4 h-4 shrink-0 ${selectedFolderId === f.id ? "text-indigo-500" : "text-indigo-400"}`} />
+                      <span className="truncate">{f.name}</span>
+                    </div>
+                    <button 
+                      onClick={(e) => handleDeleteFolder(f.id, e)} 
+                      className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-all"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Right Side: Jobs List */}
+            <div className="flex-1 min-w-0">
+              {isLoadingHistory ? (
+                <div className="flex flex-col items-center justify-center py-20 gap-4">
+                  <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                  <p className="text-sm font-medium text-gray-500">Carregando histórico...</p>
+                </div>
+              ) : historyJobs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                  <div className="w-16 h-16 bg-gray-50 text-gray-400 rounded-full flex items-center justify-center mb-4 border border-gray-100">
+                    <Clock className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-gray-900 mb-1">Nenhuma transcrição</h3>
+                  <p className="text-sm text-gray-500 max-w-xs">Nenhum áudio ou vídeo encontrado neste local.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {historyJobs.map((job) => {
+                    const date = new Date(job.created_at).toLocaleString('pt-BR');
+                    const isCompleted = job.status === "completed";
+                    const isFailed = job.status === "failed";
+                    const isProcessing = job.status === "processing";
+                    const isQueued = job.status === "queued";
+
+                    return (
+                      <div key={job.job_id} className="p-4 border border-gray-100 rounded-2xl hover:border-indigo-100 hover:bg-[#FDFEFF]/50 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div className={`p-2.5 rounded-xl shrink-0 ${
+                            isCompleted ? 'bg-green-50 text-green-600' :
+                            isFailed ? 'bg-red-50 text-red-600' :
+                            'bg-indigo-50 text-indigo-600'
+                          }`}>
+                            <FileAudio className="w-5 h-5" />
+                          </div>
+                          <div className="text-left min-w-0">
+                            <h4 className="text-sm font-bold text-gray-900 truncate" title={job.filename}>
+                              {job.filename || "Gravação de Áudio"}
+                            </h4>
+                            <div className="flex items-center gap-3 mt-1 text-xs text-gray-400 font-medium">
+                              <span className="flex items-center gap-1">
+                                <Calendar className="w-3.5 h-3.5" />
+                                {date}
+                              </span>
+                              <span className="truncate max-w-[100px]" title={job.job_id}>ID: {job.job_id.substring(0, 8)}...</span>
+                              {job.folder_id && (
+                                <span className="flex items-center gap-1 bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                                  <Folder className="w-2.5 h-2.5" />
+                                  {folders.find(f => f.id === job.folder_id)?.name || "Pasta"}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                          isCompleted ? 'bg-green-50 text-green-600 border border-green-100' :
-                          isFailed ? 'bg-red-50 text-red-600 border border-red-100' :
-                          isProcessing ? 'bg-blue-50 text-blue-600 border border-blue-100 animate-pulse' :
-                          'bg-yellow-50 text-yellow-600 border border-yellow-100'
-                        }`}>
-                          {isCompleted ? 'Concluído' :
-                           isFailed ? 'Falhou' :
-                           isProcessing ? 'Processando' : 'Na Fila'}
-                        </span>
-
-                        {isCompleted && (
-                          <button
-                            onClick={() => handleViewJob(job)}
-                            className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold text-xs rounded-xl hover:bg-indigo-100 transition-colors"
+                        <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                          {/* Folder Selector to MOVE Job */}
+                          <select
+                            value={job.folder_id || ""}
+                            onChange={(e) => handleMoveJob(job.job_id, e.target.value || null)}
+                            className="bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-600 text-[11px] rounded-lg px-2 py-1 outline-none font-semibold transition-all max-w-[120px]"
+                            title="Mover para pasta"
                           >
-                            Visualizar
-                          </button>
-                        )}
+                            <option value="">📁 Sem pasta</option>
+                            {folders.map(f => (
+                              <option key={f.id} value={f.id}>📁 {f.name}</option>
+                            ))}
+                          </select>
 
-                        {isFailed && (
-                          <button
-                            onClick={() => alert(`Erro: ${job.error || "Erro desconhecido"}`)}
-                            className="px-4 py-2 bg-red-50 text-red-600 font-bold text-xs rounded-xl hover:bg-red-100 transition-colors"
-                          >
-                            Ver Erro
-                          </button>
-                        )}
-
-                        {(isProcessing || isQueued) && (
-                          <span className="text-xs text-gray-400 font-semibold px-2 flex items-center gap-1.5">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            Aguarde...
+                          <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                            isCompleted ? 'bg-green-50 text-green-600 border border-green-100' :
+                            isFailed ? 'bg-red-50 text-red-600 border border-red-100' :
+                            isProcessing ? 'bg-blue-50 text-blue-600 border border-blue-100 animate-pulse' :
+                            'bg-yellow-50 text-yellow-600 border border-yellow-100'
+                          }`}>
+                            {isCompleted ? 'Concluído' :
+                             isFailed ? 'Falhou' :
+                             isProcessing ? 'Processando' : 'Na Fila'}
                           </span>
-                        )}
+
+                          {isCompleted && (
+                            <button
+                              onClick={() => handleViewJob(job)}
+                              className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold text-xs rounded-xl hover:bg-indigo-100 transition-colors"
+                            >
+                              Visualizar
+                            </button>
+                          )}
+
+                          {isFailed && (
+                            <button
+                              onClick={() => alert(`Erro: ${job.error || "Erro desconhecido"}`)}
+                              className="px-4 py-2 bg-red-50 text-red-600 font-bold text-xs rounded-xl hover:bg-red-100 transition-colors"
+                            >
+                              Ver Erro
+                            </button>
+                          )}
+
+                          {(isProcessing || isQueued) && (
+                            <span className="text-xs text-gray-400 font-semibold px-2 flex items-center gap-1.5">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Aguarde...
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1637,7 +4354,7 @@ export default function HomePage() {
                   <div className="flex gap-4 pt-4">
                     <button 
                       type="button"
-                      onClick={() => setCheckoutStep("plans")}
+                      onClick={() => { setCheckoutStep("plans"); setIsCheckingOut(false); setCheckoutError(null); }}
                       className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-xs rounded-xl transition-all"
                     >
                       Voltar
@@ -1893,8 +4610,19 @@ export default function HomePage() {
           {subscriptionData?.status === "cancelled" && (
             <div className="bg-white border border-zinc-200 rounded-xl p-6 text-center shadow-[0_8px_30px_rgb(0,0,0,0.02)]">
               <p className="text-xs text-zinc-500 font-medium mb-5">Sua assinatura foi cancelada, mas você mantém o acesso até a data de expiração.</p>
-              <button onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }} className="w-full px-4 py-3 bg-zinc-900 text-white hover:bg-zinc-800 text-[11px] font-bold uppercase tracking-widest transition-all rounded-lg shadow-sm">
-                Reativar Plano
+              <button 
+                onClick={handleInstantCheckout}
+                disabled={isInstantCheckingOut}
+                className="w-full px-4 py-3 bg-zinc-900 text-white hover:bg-zinc-800 text-[11px] font-bold uppercase tracking-widest transition-all rounded-lg shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isInstantCheckingOut ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Carregando...
+                  </>
+                ) : (
+                  "Reativar Plano"
+                )}
               </button>
             </div>
           )}
@@ -1906,7 +4634,7 @@ export default function HomePage() {
         <div className="w-full max-w-4xl z-10 animate-[fadeIn_0.3s_ease-out] flex flex-col items-center">
           <div className="text-center mb-8">
             <h1 className="text-[32px] md:text-[40px] font-bold text-gray-900 tracking-tight mb-2">
-              Inicie sua assinatura do UPscribe
+              Inicie sua assinatura do Transcribe
             </h1>
             <p className="text-base text-gray-500 font-medium">
               Converta áudio e vídeo em texto em segundos com a mais alta qualidade.
@@ -1937,8 +4665,19 @@ export default function HomePage() {
             </div>
 
             <div className="flex flex-col items-center">
-              <button onClick={() => { setCheckoutStep("plans"); setShowUpgradeModal(true); }} className="w-full max-w-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-lg transition-all shadow-sm text-sm mb-4">
-                Comece o teste gratuito em 7 dias.
+              <button 
+                onClick={handleInstantCheckout}
+                disabled={isInstantCheckingOut}
+                className="w-full max-w-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-lg transition-all shadow-sm text-sm mb-4 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isInstantCheckingOut ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Redirecionando...
+                  </>
+                ) : (
+                  "Comece o teste gratuito em 7 dias."
+                )}
               </button>
               <p className="text-xs text-gray-500 font-medium">Cancele a qualquer momento.</p>
             </div>
@@ -2223,10 +4962,10 @@ export default function HomePage() {
 
               <div className="text-center mb-6">
                 <span className="text-xs text-gray-600 font-medium">Esqueceu sua senha? </span>
-                <a href="#" className="text-xs text-indigo-600 font-medium hover:underline">Clique aqui</a>
+                <button onClick={() => alert("Enviaremos um link de recuperação para o seu email.")} className="text-xs text-indigo-600 font-medium hover:underline">Clique aqui</button>
               </div>
 
-              <button className="w-full bg-gray-100 text-gray-400 font-bold py-3.5 rounded-xl transition-all text-sm mb-6 cursor-not-allowed">
+              <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-sm text-sm mb-6">
                 Entrar
               </button>
 
@@ -2236,7 +4975,7 @@ export default function HomePage() {
                 <div className="flex-1 h-px bg-gray-200"></div>
               </div>
 
-              <button className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-8 shadow-sm">
+              <button onClick={handleGoogleLogin} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-8 shadow-sm">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                   <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -2248,7 +4987,7 @@ export default function HomePage() {
 
               <div className="text-center">
                 <span className="text-xs text-gray-900 font-medium">Você não tem uma conta? </span>
-                <a href="#" className="text-xs text-indigo-500 font-medium hover:underline">Crie uma conta</a>
+                <button onClick={() => { setShowLoginModal(false); setShowSignupModal(true); }} className="text-xs text-indigo-600 font-medium hover:underline">Crie uma conta</button>
               </div>
 
             </div>
@@ -2307,7 +5046,7 @@ export default function HomePage() {
                 <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
               </div>
 
-              <button className="w-full bg-gray-100 text-gray-400 font-bold py-3.5 rounded-xl transition-all text-sm mb-6 cursor-not-allowed">
+              <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-sm text-sm mb-6">
                 Criar uma conta
               </button>
 
@@ -2317,7 +5056,7 @@ export default function HomePage() {
                 <div className="flex-1 h-px bg-gray-200"></div>
               </div>
 
-              <button className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-6 shadow-sm">
+              <button onClick={handleGoogleLogin} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-6 shadow-sm">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                   <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -2339,6 +5078,58 @@ export default function HomePage() {
               </div>
 
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Create Folder Modal ── */}
+      {showCreateFolderModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-white w-full max-w-[400px] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col">
+            
+            {/* Header */}
+            <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
+              <h3 className="text-sm font-bold text-gray-900">Nova Pasta</h3>
+              <button 
+                onClick={() => setShowCreateFolderModal(false)} 
+                className="text-gray-400 hover:text-indigo-600 p-1 rounded-full hover:bg-indigo-50 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateFolder} className="p-6">
+              <div className="mb-6">
+                <label className="block text-[13px] font-semibold text-gray-700 mb-2">Nome da pasta</label>
+                <input 
+                  type="text" 
+                  required
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  placeholder="Ex: Reuniões de Marketing"
+                  className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900 font-medium"
+                />
+              </div>
+
+              <div className="flex gap-3 justify-end">
+                <button 
+                  type="button" 
+                  onClick={() => setShowCreateFolderModal(false)}
+                  className="px-4 py-2 text-sm font-semibold text-gray-500 hover:bg-gray-50 rounded-xl transition"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isCreatingFolder || !newFolderName.trim()}
+                  className="px-5 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {isCreatingFolder && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Criar Pasta
+                </button>
+              </div>
+            </form>
+
           </div>
         </div>
       )}

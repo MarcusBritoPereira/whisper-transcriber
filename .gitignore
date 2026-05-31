@@ -1,9 +1,12 @@
 node_modules/
 .next/
 venv/
+.venv/
+*.tsbuildinfo
 __pycache__/
 temp_uploads/
 .env
 .env.local
 .DS_Store
 *.db
+*.log

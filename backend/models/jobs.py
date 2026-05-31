@@ -14,6 +14,8 @@ class Job(Base):
     result_json = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
     tenant_id = Column(String, nullable=True, index=True)
+    workspace_id = Column(String, nullable=True, index=True)
+    folder_id = Column(String, nullable=True, index=True)
 
     __table_args__ = (
         Index("idx_jobs_tenant_created_at", "tenant_id", "created_at"),

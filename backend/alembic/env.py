@@ -21,6 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 from database import Base
 from models.jobs import Job
+from models.workspace import Workspace, WorkspaceMember, Folder
+from models.payment import TenantSubscription, AppmaxWebhookLog
 
 config.set_main_option("sqlalchemy.url", settings.get_database_url)
 target_metadata = Base.metadata
