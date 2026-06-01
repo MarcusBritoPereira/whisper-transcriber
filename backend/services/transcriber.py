@@ -19,33 +19,46 @@ class Transcriber:
         if cls._instance is None:
             cls._instance = super(Transcriber, cls).__new__(cls)
             cls._instance.device = "cuda" if torch.cuda.is_available() else "cpu"
-            # No Mac, "int8" é excelente para CPU. Em CUDA, "float16" é melhor.
             cls._instance.compute_type = "float16" if cls._instance.device == "cuda" else "int8"
-            cls._instance.model_name = "base"
-            
-            print(f"Loading Faster-Whisper model {cls._instance.model_name} on {cls._instance.device} ({cls._instance.compute_type})...")
-            cls._instance.model = WhisperModel(
-                cls._instance.model_name, 
-                device=cls._instance.device, 
-                compute_type=cls._instance.compute_type
-            )
-
+            cls._instance.model = None
+            cls._instance.model_name = ""
             cls._instance.hf_token = os.getenv("HF_TOKEN")
             cls._instance.diarization_pipeline = None
-            if cls._instance.hf_token:
+            cls._instance.diarization_loaded = False
+        return cls._instance
+
+    def _ensure_model_loaded(self, target_model: str) -> None:
+        if self.model is None or self.model_name != target_model:
+            import multiprocessing
+            cores = multiprocessing.cpu_count()
+            threads = min(4, cores) if self.device == "cpu" else 0
+            
+            print(f"Lazy-loading Faster-Whisper model {target_model} on {self.device} ({self.compute_type}) with threads={threads}...")
+            self.model = WhisperModel(
+                target_model, 
+                device=self.device, 
+                compute_type=self.compute_type,
+                cpu_threads=threads,
+                num_workers=1
+            )
+            self.model_name = target_model
+
+    def _ensure_diarization_loaded(self) -> None:
+        if not self.diarization_loaded:
+            self.diarization_loaded = True
+            if self.hf_token:
                 try:
-                    cls._instance.diarization_pipeline = Pipeline.from_pretrained(
+                    print("Lazy-loading pyannote speaker diarization pipeline...")
+                    self.diarization_pipeline = Pipeline.from_pretrained(
                         "pyannote/speaker-diarization-3.1",
-                        use_auth_token=cls._instance.hf_token,
+                        use_auth_token=self.hf_token,
                     )
-                    if cls._instance.device == "cuda":
-                        cls._instance.diarization_pipeline.to(torch.device("cuda"))
+                    if self.device == "cuda":
+                        self.diarization_pipeline.to(torch.device("cuda"))
                 except Exception as exc:
                     print(f"Failed to load diarization pipeline: {exc}")
             else:
                 print("HF_TOKEN not found. Speaker diarization will be disabled.")
-
-        return cls._instance
 
     def download_from_url(self, url: str, output_template: str) -> str:
         options = {
@@ -96,11 +109,9 @@ class Transcriber:
         language: str = "pt",
     ) -> Dict[str, Any]:
         target_model = "tiny" if mode == "rapido" else ("medium" if mode == "preciso" else "base")
-        
-        if self.model_name != target_model:
-            print(f"Switching Faster-Whisper model from {self.model_name} to {target_model}...")
-            self.model = WhisperModel(target_model, device=self.device, compute_type=self.compute_type)
-            self.model_name = target_model
+        self._ensure_model_loaded(target_model)
+        if diarize:
+            self._ensure_diarization_loaded()
 
         task = "translate" if (translate and language.startswith("en")) else "transcribe"
 
@@ -116,10 +127,13 @@ class Transcriber:
             print(f"Transcribing {audio_path} with Faster-Whisper ({self.model_name})...")
             start_t = time.time()
             
+            # Ajustar o beam_size dinamicamente de acordo com o modo para máxima performance na CPU
+            beam_size = 1 if mode == "rapido" else (5 if mode == "preciso" else 2)
+            
             # faster-whisper transcribe returns (segments_generator, info)
             segments_gen, info = self.model.transcribe(
                 audio_path, 
-                beam_size=5, 
+                beam_size=beam_size, 
                 language=language if language != "auto" else None,
                 task=task
             )

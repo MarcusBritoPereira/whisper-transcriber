@@ -67,7 +67,7 @@ services:
       dockerfile: backend/Dockerfile
     env_file: .env
     ports:
-      - "8000:8000"
+      - "8005:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -107,7 +107,7 @@ services:
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-local-development-anon-key}
     env_file: .env
     ports:
-      - "3000:3000"
+      - "3005:3000"
     depends_on:
       backend:
         condition: service_healthy

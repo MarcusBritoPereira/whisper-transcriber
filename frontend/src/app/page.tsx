@@ -282,8 +282,8 @@ export default function HomePage() {
   const [settingsSubTab, setSettingsSubTab] = useState<"gerais" | "fiscais">("gerais");
   const [profileFirstName, setProfileFirstName] = useState("Marcus");
   const [profileLastName, setProfileLastName] = useState("Pereira");
-  const [profilePhoneArea, setProfilePhoneArea] = useState("34");
-  const [profilePhoneNumber, setProfilePhoneNumber] = useState("6555123");
+  const [profilePhoneArea, setProfilePhoneArea] = useState("");
+  const [profilePhoneNumber, setProfilePhoneNumber] = useState("");
   const [profilePassword, setProfilePassword] = useState("********");
   const [profileLanguage, setProfileLanguage] = useState("pt");
   const [profileTimezone, setProfileTimezone] = useState("GMT+01:00");
