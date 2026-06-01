@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import torch
 
-app = FastAPI(title="Whisper Audio Transcriber")
+app = FastAPI(title="Whisper Audio Transcritor")
 
 # Load Whisper model (using base for efficiency)
 print("Loading Whisper model...")

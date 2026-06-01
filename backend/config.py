@@ -5,7 +5,7 @@ from typing import Set, Dict, Optional
 
 class Settings(BaseSettings):
     # App General
-    APP_TITLE: str = "UPscribe API"
+    APP_TITLE: str = "Transcritor API"
     UPLOAD_DIR: str = "temp_uploads"
     RESULTS_DIR: str = "results"
     MAX_FILE_MB: int = 200
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # Resend Email Config
     RESEND_API_KEY: str = "sua_resend_api_key"
-    EMAIL_FROM_NAME: str = "UPscribe"
+    EMAIL_FROM_NAME: str = "Transcritor"
     APP_URL: str = "http://localhost:3000"
 
     # Supabase Auth Config

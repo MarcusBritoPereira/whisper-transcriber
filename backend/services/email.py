@@ -1,5 +1,5 @@
 """
-Email service for UPscribe — powered by Resend.
+Email service for Transcritor — powered by Resend.
 Handles welcome emails, subscription confirmations, and cancellation notices.
 """
 
@@ -29,7 +29,7 @@ def _welcome_html(customer_name: str, expires_at: str) -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Bem-vindo ao UPscribe Premium</title>
+  <title>Bem-vindo ao Transcritor Premium</title>
 </head>
 <body style="margin:0;padding:0;background:#F0F4FF;font-family:'Segoe UI',Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#F0F4FF;padding:40px 16px;">
@@ -41,7 +41,7 @@ def _welcome_html(customer_name: str, expires_at: str) -> str:
           <tr>
             <td style="background:linear-gradient(135deg,#4F46E5 0%,#6366F1 100%);padding:36px 40px 28px;text-align:center;">
               <div style="display:inline-flex;align-items:center;gap:10px;">
-                <span style="font-size:28px;font-weight:900;color:#ffffff;letter-spacing:-1px;">⚡ UPscribe</span>
+                <span style="font-size:28px;font-weight:900;color:#ffffff;letter-spacing:-1px;">⚡ Transcritor</span>
               </div>
               <p style="margin:8px 0 0;color:#C7D2FE;font-size:13px;font-weight:500;">Transcrição com IA de última geração</p>
             </td>
@@ -141,7 +141,7 @@ def _welcome_html(customer_name: str, expires_at: str) -> str:
           <tr>
             <td style="background:#F9FAFB;padding:20px 40px;text-align:center;border-top:1px solid #E5E7EB;">
               <p style="margin:0;font-size:11px;color:#9CA3AF;line-height:1.6;">
-                Você recebeu este e-mail porque assinou o UPscribe Premium.<br/>
+                Você recebeu este e-mail porque assinou o Transcritor Premium.<br/>
                 Em caso de dúvidas, entre em contato conosco. &nbsp;|&nbsp; <a href="#" style="color:#6366F1;text-decoration:none;">Cancelar assinatura</a>
               </p>
             </td>
@@ -170,7 +170,7 @@ def _cancellation_html(customer_name: str) -> str:
         <table width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.07);">
           <tr>
             <td style="background:linear-gradient(135deg,#4F46E5,#6366F1);padding:28px 40px;text-align:center;">
-              <span style="font-size:24px;font-weight:900;color:#fff;letter-spacing:-1px;">⚡ UPscribe</span>
+              <span style="font-size:24px;font-weight:900;color:#fff;letter-spacing:-1px;">⚡ Transcritor</span>
             </td>
           </tr>
           <tr>
@@ -188,13 +188,13 @@ def _cancellation_html(customer_name: str) -> str:
               </div>
               <a href="http://localhost:3000"
                  style="display:inline-block;background:#4F46E5;color:#fff;font-size:13px;font-weight:700;text-decoration:none;padding:14px 32px;border-radius:10px;">
-                Voltar ao UPscribe
+                Voltar ao Transcritor
               </a>
             </td>
           </tr>
           <tr>
             <td style="background:#F9FAFB;padding:16px 40px;text-align:center;border-top:1px solid #E5E7EB;">
-              <p style="margin:0;font-size:11px;color:#9CA3AF;">© 2025 UPscribe. Todos os direitos reservados.</p>
+              <p style="margin:0;font-size:11px;color:#9CA3AF;">© 2025 Transcritor. Todos os direitos reservados.</p>
             </td>
           </tr>
         </table>
@@ -216,9 +216,9 @@ def send_welcome_email(to_email: str, customer_name: str, expires_at: str) -> bo
 
     try:
         params: resend.Emails.SendParams = {
-            "from": "UPscribe <onboarding@resend.dev>",
+            "from": "Transcritor <onboarding@resend.dev>",
             "to": [to_email],
-            "subject": "🎉 Bem-vindo ao UPscribe Premium!",
+            "subject": "🎉 Bem-vindo ao Transcritor Premium!",
             "html": _welcome_html(customer_name, expires_at),
         }
         email = resend.Emails.send(params)
@@ -239,9 +239,9 @@ def send_cancellation_email(to_email: str, customer_name: str) -> bool:
 
     try:
         params: resend.Emails.SendParams = {
-            "from": "UPscribe <onboarding@resend.dev>",
+            "from": "Transcritor <onboarding@resend.dev>",
             "to": [to_email],
-            "subject": "Cancelamento de assinatura confirmado — UPscribe",
+            "subject": "Cancelamento de assinatura confirmado — Transcritor",
             "html": _cancellation_html(customer_name),
         }
         email = resend.Emails.send(params)

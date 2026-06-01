@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "UPscribe | Premium AI Audio",
+  title: "Transcritor | Premium AI Audio",
   description: "Minimalist Whisper-powered transcription system",
 };
 

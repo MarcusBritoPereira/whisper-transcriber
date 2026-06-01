@@ -4257,7 +4257,7 @@ export default function HomePage() {
                   <div className="w-16 h-16 bg-amber-100/50 text-amber-500 rounded-full flex items-center justify-center mb-5 border border-amber-200/20">
                     <Zap className="w-8 h-8 fill-current" />
                   </div>
-                  <h4 className="text-[20px] font-black text-gray-900 mb-1">Whisper Transcriber Premium</h4>
+                  <h4 className="text-[20px] font-black text-gray-900 mb-1">Whisper Transcritor Premium</h4>
                   <p className="text-xs text-gray-500 font-medium mb-6">Acesso ilimitado à inteligência artificial de transcrição mais precisa do mundo.</p>
                   
                   {/* Pricing Card */}

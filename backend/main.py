@@ -146,7 +146,7 @@ def make_abacate_request(method: str, path: str, payload: dict = None) -> dict:
     data = json.dumps(payload).encode("utf-8") if payload else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("accept", "application/json")
-    req.add_header("User-Agent", "UPscribe-Backend/1.0")
+    req.add_header("User-Agent", "Transcritor-Backend/1.0")
     if data:
         req.add_header("content-type", "application/json")
     req.add_header("Authorization", f"Bearer {settings.ABACATE_API_KEY}")
@@ -184,7 +184,7 @@ def get_or_create_abacate_product() -> str:
         logger.info("[Abacate Pay] Creating premium product dynamically...")
         create_payload = {
             "externalId": "upscribe_annual_premium",
-            "name": "Assinatura Anual Whisper Transcriber",
+            "name": "Assinatura Anual Whisper Transcritor",
             "price": 15000,
             "currency": "BRL",
             "description": "Acesso premium ilimitado ao transcritor por 1 ano."
