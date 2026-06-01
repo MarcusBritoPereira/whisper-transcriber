@@ -1086,7 +1086,7 @@ export default function HomePage() {
     try {
       const payload: any = {
         first_name: profileFirstName || "Usuário",
-        last_name: profileLastName || "Transcribe",
+        last_name: profileLastName || "Transcritor",
         email: user?.email || "",
         phone: (profilePhoneArea && profilePhoneNumber) ? `${profilePhoneArea}${profilePhoneNumber}` : null,
         payment_method: "pix"
@@ -1325,7 +1325,7 @@ export default function HomePage() {
               <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-md shadow-indigo-600/10">
                 <Mic className="w-5 h-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-gray-900 tracking-tight">Transcribe</span>
+              <span className="text-lg font-bold text-gray-900 tracking-tight">Transcritor</span>
             </div>
             
             {/* Menu Items */}
@@ -1914,7 +1914,7 @@ export default function HomePage() {
               
               {/* Header */}
               <div className="flex items-center justify-between border-b border-gray-100 pb-4">
-                <h1 className="text-xl font-bold text-gray-900 tracking-tight">Inicie sua assinatura do Transcribe</h1>
+                <h1 className="text-xl font-bold text-gray-900 tracking-tight">Inicie sua assinatura do Transcritor</h1>
               </div>
 
               {/* Central Premium Container */}
@@ -3280,7 +3280,7 @@ export default function HomePage() {
           <div className="w-8 h-8 bg-indigo-500 rounded-md flex items-center justify-center shadow-sm">
             <Mic className="w-5 h-5 text-white" />
           </div>
-          <span className="text-xl font-bold text-gray-900 tracking-tight">Transcribe</span>
+          <span className="text-xl font-bold text-gray-900 tracking-tight">Transcritor</span>
         </div>
 
         <nav className="hidden md:flex items-center gap-8">
@@ -4760,7 +4760,7 @@ export default function HomePage() {
         <div className="w-full max-w-4xl z-10 animate-[fadeIn_0.3s_ease-out] flex flex-col items-center">
           <div className="text-center mb-8">
             <h1 className="text-[32px] md:text-[40px] font-bold text-gray-900 tracking-tight mb-2">
-              Inicie sua assinatura do Transcribe
+              Inicie sua assinatura do Transcritor
             </h1>
             <p className="text-base text-gray-500 font-medium">
               Converta áudio e vídeo em texto em segundos com a mais alta qualidade.

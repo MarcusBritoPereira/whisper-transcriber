@@ -1375,9 +1375,9 @@ def send_support_ticket(
         resend.api_key = settings.RESEND_API_KEY
         
         params = {
-            "from": "Suporte Transcribe <onboarding@resend.dev>",
+            "from": "Suporte Transcritor <onboarding@resend.dev>",
             "to": "marcusrodrigo2@gmail.com",
-            "subject": f"[Suporte Transcribe] {req.subject}",
+            "subject": f"[Suporte Transcritor] {req.subject}",
             "html": f"""
             <h3>Nova solicitação de suporte</h3>
             <p><strong>Usuário:</strong> {email}</p>
