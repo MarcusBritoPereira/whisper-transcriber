@@ -50,8 +50,6 @@ import {
 } from "lucide-react";
 import axios from "axios";
 
-// Configure default X-API-Key header for Axios requests
-axios.defaults.headers.common["X-API-Key"] = "sua_chave_cliente";
 
 interface Segment {
   speaker: string;
@@ -1118,13 +1116,14 @@ export default function HomePage() {
     const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
     try {
+      const clientIp = typeof window !== "undefined" ? window.location.hostname : undefined;
       const payload: any = {
         first_name: checkoutForm.first_name,
         last_name: checkoutForm.last_name,
         email: checkoutForm.email,
         phone: checkoutForm.phone,
         document_number: checkoutForm.document_number,
-        ip: "127.0.0.1",
+        ip: clientIp,
         payment_method: checkoutForm.payment_method,
         postcode: checkoutForm.postcode || null,
         street: checkoutForm.street || null,

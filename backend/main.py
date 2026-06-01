@@ -9,6 +9,8 @@ import hmac
 import hashlib
 import urllib.request
 import urllib.parse
+import ipaddress
+import socket
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import List, Optional
@@ -17,6 +19,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, W
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -41,7 +44,7 @@ app = FastAPI(title=settings.APP_TITLE)
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS.split(","),
+    allow_origins=settings.parsed_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,9 +54,10 @@ app.add_middleware(
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.RESULTS_DIR, exist_ok=True)
 
-# Rate Limit Tracker (Redis backing can be added, currently keeping memory IP+Tenant track)
+# In-memory fallback for local/dev rate limiting. Production should use Redis.
 _rate_limit_window: dict[str, list[float]] = {}
 _rate_limit_lock = threading.Lock()
+_redis_rate_limit_client = None
 
 
 # Pydantic Schemas
@@ -317,17 +321,80 @@ def utc_now_iso() -> str:
 
 
 def validate_runtime_config() -> None:
-    api_keys = settings.parsed_api_keys
-    if not api_keys:
-        raise RuntimeError("API_KEYS must be configured for production usage")
-    api_key_tenants = settings.parsed_api_key_tenants
-    if api_key_tenants:
-        missing = [k for k in api_keys if k not in api_key_tenants]
-        if missing:
-            raise RuntimeError(f"API_KEY_TENANTS is missing mappings for {len(missing)} key(s)")
+    errors: list[str] = []
+
+    if settings.is_production:
+        if settings.DEV_MODE:
+            errors.append("DEV_MODE must be false in production")
+        if settings.RUN_SCHEMA_CREATE_ON_STARTUP:
+            errors.append("RUN_SCHEMA_CREATE_ON_STARTUP must be false in production; run Alembic migrations instead")
+        if not settings.APP_URL.startswith("https://"):
+            errors.append("APP_URL must use HTTPS in production")
+        if any(origin.startswith("http://") for origin in settings.parsed_allowed_origins):
+            errors.append("ALLOWED_ORIGINS must use HTTPS in production")
+        if settings.ENABLE_LEGACY_API_KEYS:
+            errors.append("ENABLE_LEGACY_API_KEYS must be false in production")
+        if settings.RATE_LIMIT_BACKEND.lower() != "redis":
+            errors.append("RATE_LIMIT_BACKEND must be redis in production")
+
+        insecure_values = {
+            "JWT_SECRET": settings.JWT_SECRET,
+            "POSTGRES_PASSWORD": settings.POSTGRES_PASSWORD,
+            "S3_SECRET_ACCESS_KEY": settings.S3_SECRET_ACCESS_KEY,
+            "APPMAX_SIGNATURE_SECRET": settings.APPMAX_SIGNATURE_SECRET,
+            "ABACATE_WEBHOOK_SECRET": settings.ABACATE_WEBHOOK_SECRET,
+            "RESEND_API_KEY": settings.RESEND_API_KEY,
+        }
+        insecure_markers = {"", "postgres", "minioadmin", "change-me-local-jwt-secret", "sua_signature_secret_default", "sua_resend_api_key"}
+        for name, value in insecure_values.items():
+            if value in insecure_markers:
+                errors.append(f"{name} must be configured with a non-default secret in production")
+
+        if not settings.SUPABASE_URL or not settings.SUPABASE_ANON_KEY or not settings.SUPABASE_JWT_SECRET:
+            errors.append("Supabase URL, anon key and JWT secret are required in production")
+        if not settings.ABACATE_API_KEY:
+            errors.append("ABACATE_API_KEY is required in production")
+
+    if settings.ENABLE_LEGACY_API_KEYS:
+        api_keys = settings.parsed_api_keys
+        if not api_keys:
+            errors.append("API_KEYS must be configured when ENABLE_LEGACY_API_KEYS=true")
+        api_key_tenants = settings.parsed_api_key_tenants
+        if api_key_tenants:
+            missing = [k for k in api_keys if k not in api_key_tenants]
+            if missing:
+                errors.append(f"API_KEY_TENANTS is missing mappings for {len(missing)} key(s)")
+
+    if errors:
+        raise RuntimeError("Invalid runtime configuration: " + "; ".join(errors))
+
+
+def _redis_rate_limit():
+    global _redis_rate_limit_client
+    if settings.RATE_LIMIT_BACKEND.lower() != "redis":
+        return None
+    if _redis_rate_limit_client is None:
+        import redis
+        _redis_rate_limit_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis_rate_limit_client
 
 
 def check_rate_limit(client_id: str) -> None:
+    redis_client = _redis_rate_limit()
+    if redis_client:
+        key = f"rate-limit:{client_id}:{int(time.time() // 60)}"
+        try:
+            count = redis_client.incr(key)
+            if count == 1:
+                redis_client.expire(key, 70)
+            if count > settings.RATE_LIMIT_PER_MIN:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            return
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("redis_rate_limit_unavailable=%s; falling back to memory", exc)
+
     now = time.time()
     with _rate_limit_lock:
         window = _rate_limit_window.setdefault(client_id, [])
@@ -338,19 +405,43 @@ def check_rate_limit(client_id: str) -> None:
         window.append(now)
 
 
+def _is_public_hostname(host: str) -> bool:
+    if not host:
+        return False
+    try:
+        candidate = ipaddress.ip_address(host)
+        return candidate.is_global
+    except ValueError:
+        pass
+
+    try:
+        resolved = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        logger.warning("url_host_dns_resolution_failed=%s", host)
+        return False
+
+    for item in resolved:
+        address = item[4][0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        if not ip.is_global:
+            logger.warning("blocked_non_public_url_host=%s resolved_ip=%s", host, ip)
+            return False
+    return True
+
+
 def allowed_url(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return False
-    host = parsed.hostname or ""
-    
-    # Strict SSRF Defense: Block private/local IP requests if pointing to local subnets
-    if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith(("192.168.", "10.", "172.16.", "172.31.")):
-        logger.warning(f"Blocked potential SSRF attack: host {host} requested.")
-        return False
-        
-    return any(host == d or host.endswith(f".{d}") for d in settings.parsed_download_domains)
 
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not _is_public_hostname(host):
+        return False
+
+    return any(host == d or host.endswith(f".{d}") for d in settings.parsed_download_domains)
 
 def purge_old_jobs(db: Session) -> int:
     cutoff = datetime.now(timezone.utc).timestamp() - (settings.JOB_RETENTION_DAYS * 86400)
@@ -416,11 +507,11 @@ def to_vtt(segments: list[dict]) -> str:
 def startup() -> None:
     validate_runtime_config()
     ensure_bucket_exists()
-    
-    # Provision tables in database
-    from models.payment import TenantSubscription, AppmaxWebhookLog
-    Base.metadata.create_all(bind=engine)
-    
+
+    if settings.RUN_SCHEMA_CREATE_ON_STARTUP:
+        logger.warning("RUN_SCHEMA_CREATE_ON_STARTUP is enabled; use Alembic migrations for staging/production.")
+        Base.metadata.create_all(bind=engine)
+
     # Establish DB session & run purge
     from database import SessionLocal
     db = SessionLocal()
@@ -428,7 +519,7 @@ def startup() -> None:
         deleted_count = purge_old_jobs(db)
     finally:
         db.close()
-        
+
     logger.info("service_started", extra={"app": settings.APP_TITLE, "purged_jobs": deleted_count})
 
 
@@ -440,8 +531,14 @@ def healthz():
 
 @app.get("/readyz")
 def readyz(db: Session = Depends(get_db)):
-    db.execute("SELECT 1")
-    return {"status": "ready"}
+    db.execute(text("SELECT 1"))
+    redis_ok = True
+    if settings.RATE_LIMIT_BACKEND.lower() == "redis":
+        try:
+            _redis_rate_limit().ping()
+        except Exception:
+            redis_ok = False
+    return {"status": "ready" if redis_ok else "degraded", "redis": redis_ok}
 
 
 @app.post("/transcribe", response_model=TranscriptionResponse)
@@ -904,7 +1001,7 @@ async def websocket_transcribe(websocket: WebSocket):
 @app.get("/api/v1/payments/subscription-status")
 def get_subscription_status(tenant_id: str = Depends(get_tenant_id), db: Session = Depends(get_db)):
     # DEV MODE: Grant active status to all authenticated users while payment gateway is pending
-    if getattr(settings, "DEV_MODE", True):
+    if settings.DEV_MODE:
         from datetime import timedelta
         expires = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
         return {
@@ -979,8 +1076,8 @@ async def handle_checkout(
         ],
         "frequency": "ONE_TIME",
         "methods": ["PIX", "CARD"],
-        "returnUrl": f"http://localhost:3000?status=success&tenant_id={tenant_id}",
-        "completionUrl": f"http://localhost:3000?status=success&tenant_id={tenant_id}",
+        "returnUrl": f"{settings.APP_URL.rstrip('/')}?status=success&tenant_id={tenant_id}",
+        "completionUrl": f"{settings.APP_URL.rstrip('/')}?status=success&tenant_id={tenant_id}",
         "externalId": unique_ext_id
     }
 
@@ -1375,8 +1472,8 @@ def send_support_ticket(
         resend.api_key = settings.RESEND_API_KEY
         
         params = {
-            "from": "Suporte Transcritor <onboarding@resend.dev>",
-            "to": "marcusrodrigo2@gmail.com",
+            "from": f"{settings.EMAIL_FROM_NAME} <{settings.EMAIL_FROM_ADDRESS}>",
+            "to": settings.SUPPORT_EMAIL_TO,
             "subject": f"[Suporte Transcritor] {req.subject}",
             "html": f"""
             <h3>Nova solicitação de suporte</h3>

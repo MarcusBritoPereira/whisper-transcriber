@@ -130,7 +130,7 @@ def _welcome_html(customer_name: str, expires_at: str) -> str:
           <!-- CTA -->
           <tr>
             <td style="padding:0 40px 40px;text-align:center;">
-              <a href="http://localhost:3000"
+              <a href="{settings.APP_URL}"
                  style="display:inline-block;background:linear-gradient(135deg,#4F46E5,#6366F1);color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;padding:16px 40px;border-radius:12px;letter-spacing:0.2px;box-shadow:0 4px 14px rgba(99,102,241,0.35);">
                 Começar a Transcrever →
               </a>
@@ -186,7 +186,7 @@ def _cancellation_html(customer_name: str) -> str:
                   💡 Mudou de ideia? Você pode reativar sua assinatura a qualquer momento.
                 </p>
               </div>
-              <a href="http://localhost:3000"
+              <a href="{settings.APP_URL}"
                  style="display:inline-block;background:#4F46E5;color:#fff;font-size:13px;font-weight:700;text-decoration:none;padding:14px 32px;border-radius:10px;">
                 Voltar ao Transcritor
               </a>

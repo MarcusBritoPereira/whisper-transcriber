@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 JWT_SECRET = settings.JWT_SECRET
 JWT_ALGORITHM = settings.JWT_ALGORITHM
-SUPABASE_JWT_SECRET = getattr(settings, "SUPABASE_JWT_SECRET", JWT_SECRET)
+SUPABASE_JWT_SECRET = settings.SUPABASE_JWT_SECRET or JWT_SECRET
 
 
 def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -134,7 +134,9 @@ def get_tenant_id(
         return tenant_id
         
     # 2. Fallback to Legacy X-API-Key for backwards compatibility/local dev
-    if x_api_key:
+    if x_api_key and settings.ENABLE_LEGACY_API_KEYS:
         return validate_api_key(x_api_key)
+    if x_api_key and not settings.ENABLE_LEGACY_API_KEYS:
+        raise HTTPException(status_code=401, detail="Legacy API key authentication is disabled")
         
     raise HTTPException(status_code=401, detail="Authentication credentials missing (Bearer JWT or X-API-Key)")
