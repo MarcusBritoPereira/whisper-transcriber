@@ -24,7 +24,7 @@ from database import get_db, engine, Base
 from models.jobs import Job
 from models.payment import TenantSubscription, AppmaxWebhookLog
 from models.workspace import Folder, Workspace, User, WorkspaceMember
-from services.auth import get_tenant_id
+from services.auth import get_tenant_id, decode_jwt_token
 from services.storage import upload_file, delete_file, ensure_bucket_exists, generate_presigned_download_url
 from services.transcriber import transcriber_service
 from services.email import send_welcome_email, send_cancellation_email
