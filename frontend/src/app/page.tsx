@@ -1279,6 +1279,26 @@ export default function HomePage() {
     }
   };
 
+  const handleDddChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const clean = e.target.value.replace(/\D/g, "").slice(0, 2);
+    setProfilePhoneArea(clean);
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    const cleanValue = value.replace(/\D/g, "").slice(0, 9);
+    
+    let formatted = "";
+    if (cleanValue.length <= 4) {
+      formatted = cleanValue;
+    } else if (cleanValue.length <= 8) {
+      formatted = `${cleanValue.slice(0, 4)}-${cleanValue.slice(4)}`;
+    } else {
+      formatted = `${cleanValue.slice(0, 5)}-${cleanValue.slice(5)}`;
+    }
+    setProfilePhoneNumber(formatted);
+  };
+
   if (user) {
     return (
       <div className="min-h-screen bg-[#F9FAFB] flex relative font-sans text-gray-900 overflow-x-hidden">
@@ -2299,22 +2319,22 @@ export default function HomePage() {
 
                           <div>
                             <label className="block text-[10px] font-bold text-gray-400 mb-1.5">Telefone</label>
-                            <div className="grid grid-cols-4 gap-4">
-                              <div className="col-span-1">
+                            <div className="flex gap-3">
+                              <div className="w-[80px] shrink-0">
                                 <input 
                                   type="text"
                                   value={profilePhoneArea}
-                                  onChange={(e) => setProfilePhoneArea(e.target.value)}
-                                  placeholder="Ex. 34"
+                                  onChange={handleDddChange}
+                                  placeholder="DDD"
                                   className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all text-center"
                                 />
                               </div>
-                              <div className="col-span-3">
+                              <div className="flex-1">
                                 <input 
                                   type="text"
                                   value={profilePhoneNumber}
-                                  onChange={(e) => setProfilePhoneNumber(e.target.value)}
-                                  placeholder="Exemplo: 6555123"
+                                  onChange={handlePhoneChange}
+                                  placeholder="Exemplo: 99999-9999"
                                   className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50 transition-all"
                                 />
                               </div>
