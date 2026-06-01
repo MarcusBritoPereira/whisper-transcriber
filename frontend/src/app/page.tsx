@@ -825,6 +825,21 @@ export default function HomePage() {
     } else {
       setFolders([]);
       setWorkspaceMembers([]);
+      setHistoryJobs([]);
+      setResult(null);
+      setViewMode("transcribe");
+      setSelectedFolderId("all");
+      setAudioUrl(null);
+      setJobId(null);
+      setJobStatus(null);
+      setIsTranscribing(false);
+      setError(null);
+      setProfileName("");
+      setProfileFirstName("Marcus");
+      setProfileLastName("Pereira");
+      setFiscalEmail("");
+      setFiscalFirstName("");
+      setFiscalLastName("");
     }
   }, [user]);
 
@@ -3693,7 +3708,7 @@ export default function HomePage() {
       )}
 
       {/* History view */}
-      {viewMode === "history" && !result && (
+      {viewMode === "history" && user && !result && (
         <div className="w-full max-w-[800px] z-10 flex flex-col items-center">
           <div className="text-center mb-10 w-full px-4">
             <h1 className="text-[28px] sm:text-[32px] font-bold text-gray-900 mb-3 tracking-tight">
@@ -4642,7 +4657,7 @@ export default function HomePage() {
       )}
 
       {/* ── Minha Conta View ── */}
-      {viewMode === "plan" && (
+      {viewMode === "plan" && user && (
         <div className="w-full max-w-[540px] z-10 animate-[fadeIn_0.3s_ease-out]">
           
           <div className="flex items-center gap-5 mb-8 pb-6 border-b border-zinc-100">
