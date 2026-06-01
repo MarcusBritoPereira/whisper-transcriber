@@ -163,6 +163,97 @@ export default function HomePage() {
   const [showSignupModal, setShowSignupModal] = useState<boolean>(false);
   const [user, setUser] = useState<any>(null);
 
+  // Password Authentication States & Handlers
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const openLoginModal = () => {
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError(null);
+    setShowLoginModal(true);
+    setShowSignupModal(false);
+  };
+
+  const openSignupModal = () => {
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError(null);
+    setShowSignupModal(true);
+    setShowLoginModal(false);
+  };
+
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail || !authPassword) {
+      setAuthError("Por favor, preencha todos os campos.");
+      return;
+    }
+    setIsAuthLoading(true);
+    setAuthError(null);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      if (error) {
+        setAuthError(error.message || "Erro ao fazer login. Verifique suas credenciais.");
+      } else {
+        setShowLoginModal(false);
+        setAuthEmail("");
+        setAuthPassword("");
+      }
+    } catch (err: any) {
+      setAuthError("Ocorreu um erro inesperado ao fazer login.");
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handlePasswordSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail || !authPassword) {
+      setAuthError("Por favor, preencha todos os campos.");
+      return;
+    }
+    if (authPassword.length < 6) {
+      setAuthError("A senha precisa ter no mínimo 6 caracteres.");
+      return;
+    }
+    setIsAuthLoading(true);
+    setAuthError(null);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: authEmail,
+        password: authPassword,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        }
+      });
+      if (error) {
+        setAuthError(error.message || "Erro ao criar conta.");
+      } else {
+        if (data.session) {
+          setShowSignupModal(false);
+          setAuthEmail("");
+          setAuthPassword("");
+          alert("Conta criada e logada com sucesso!");
+        } else {
+          setShowSignupModal(false);
+          setAuthEmail("");
+          setAuthPassword("");
+          alert("Cadastro realizado! Por favor, verifique sua caixa de e-mail para confirmar o cadastro.");
+        }
+      }
+    } catch (err: any) {
+      setAuthError("Ocorreu um erro inesperado ao criar a conta.");
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
   // New SaaS Modules & Tab Navigation State
   const [activeTab, setActiveTab] = useState<"transcriptions" | "billing" | "users" | "settings" | "contact">("transcriptions");
   const [workspaceName, setWorkspaceName] = useState("Meu Workspace");
@@ -3304,10 +3395,10 @@ export default function HomePage() {
             </>
           ) : (
             <>
-              <button onClick={() => setShowLoginModal(true)} className="text-sm font-bold text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 px-5 py-2.5 rounded-md transition-all shadow-sm">
+              <button onClick={openLoginModal} className="text-sm font-bold text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 px-5 py-2.5 rounded-md transition-all shadow-sm">
                 Entrar
               </button>
-              <button onClick={() => setShowSignupModal(true)} className="bg-gray-900 hover:bg-gray-800 text-white text-sm font-bold px-5 py-2.5 rounded-md transition-all shadow-sm">
+              <button onClick={openSignupModal} className="bg-gray-900 hover:bg-gray-800 text-white text-sm font-bold px-5 py-2.5 rounded-md transition-all shadow-sm">
                 Criar Conta
               </button>
             </>
@@ -5051,19 +5142,25 @@ export default function HomePage() {
             {/* Header */}
             <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
               <h3 className="text-sm font-bold text-gray-900">Entrar</h3>
-              <button onClick={() => setShowLoginModal(false)} className="text-indigo-500 hover:text-indigo-700 p-1 rounded-full hover:bg-indigo-50 transition-colors">
+              <button onClick={() => setShowLoginModal(false)} className="text-indigo-500 hover:text-indigo-700 p-1 rounded-full hover:bg-indigo-50 transition-colors cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="px-8 pt-8 pb-10">
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Bem-vindo(a) de volta!</h2>
-              <p className="text-sm text-gray-500 font-medium mb-8">
+              <p className="text-sm text-gray-500 font-medium mb-6">
                 Entre com suas redes sociais ou complete seus dados.
               </p>
 
+              {authError && (
+                <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs rounded-xl border border-red-100 font-semibold text-center">
+                  {authError}
+                </div>
+              )}
+
               {/* Form */}
-              <div className="space-y-4 mb-6">
+              <form onSubmit={handlePasswordLogin} className="space-y-4 mb-6">
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                     <User className="w-5 h-5 text-gray-400" />
@@ -5071,6 +5168,9 @@ export default function HomePage() {
                   <input 
                     type="email" 
                     placeholder="nome@email.com" 
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    required
                     className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
                   />
                 </div>
@@ -5081,19 +5181,27 @@ export default function HomePage() {
                   <input 
                     type="password" 
                     placeholder="Insira sua senha aqui" 
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    required
                     className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
                   />
                 </div>
-              </div>
 
-              <div className="text-center mb-6">
-                <span className="text-xs text-gray-600 font-medium">Esqueceu sua senha? </span>
-                <button onClick={() => alert("Enviaremos um link de recuperação para o seu email.")} className="text-xs text-indigo-600 font-medium hover:underline">Clique aqui</button>
-              </div>
+                <div className="text-center py-2">
+                  <span className="text-xs text-gray-600 font-medium">Esqueceu sua senha? </span>
+                  <button type="button" onClick={() => alert("Enviaremos um link de recuperação para o seu email.")} className="text-xs text-indigo-600 font-medium hover:underline">Clique aqui</button>
+                </div>
 
-              <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-sm text-sm mb-6">
-                Entrar
-              </button>
+                <button 
+                  type="submit"
+                  disabled={isAuthLoading}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold py-3.5 rounded-xl transition-all shadow-sm text-sm flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {isAuthLoading && <Loader2 className="w-4.5 h-4.5 animate-spin" />}
+                  Entrar
+                </button>
+              </form>
 
               <div className="flex items-center justify-center gap-4 mb-6">
                 <div className="flex-1 h-px bg-gray-200"></div>
@@ -5101,7 +5209,7 @@ export default function HomePage() {
                 <div className="flex-1 h-px bg-gray-200"></div>
               </div>
 
-              <button onClick={handleGoogleLogin} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-8 shadow-sm">
+              <button type="button" onClick={handleGoogleLogin} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-8 shadow-sm cursor-pointer">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                   <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -5113,7 +5221,7 @@ export default function HomePage() {
 
               <div className="text-center">
                 <span className="text-xs text-gray-900 font-medium">Você não tem uma conta? </span>
-                <button onClick={() => { setShowLoginModal(false); setShowSignupModal(true); }} className="text-xs text-indigo-600 font-medium hover:underline">Crie uma conta</button>
+                <button type="button" onClick={openSignupModal} className="text-xs text-indigo-600 font-medium hover:underline">Crie uma conta</button>
               </div>
 
             </div>
@@ -5129,19 +5237,25 @@ export default function HomePage() {
             {/* Header */}
             <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
               <h3 className="text-sm font-bold text-gray-900">Criar Conta</h3>
-              <button onClick={() => setShowSignupModal(false)} className="text-indigo-500 hover:text-indigo-700 p-1 rounded-full hover:bg-indigo-50 transition-colors">
+              <button onClick={() => setShowSignupModal(false)} className="text-indigo-500 hover:text-indigo-700 p-1 rounded-full hover:bg-indigo-50 transition-colors cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="px-8 pt-8 pb-10">
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Comece com o teste de 7 dias</h2>
-              <p className="text-sm text-gray-500 font-medium mb-8">
+              <p className="text-sm text-gray-500 font-medium mb-6">
                 Crie sua conta com suas redes sociais ou e-mail.
               </p>
 
+              {authError && (
+                <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs rounded-xl border border-red-100 font-semibold text-center">
+                  {authError}
+                </div>
+              )}
+
               {/* Form */}
-              <div className="space-y-4 mb-4">
+              <form onSubmit={handlePasswordSignup} className="space-y-4 mb-4">
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                     <User className="w-5 h-5 text-gray-400" />
@@ -5149,6 +5263,9 @@ export default function HomePage() {
                   <input 
                     type="email" 
                     placeholder="nome@email.com" 
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    required
                     className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
                   />
                 </div>
@@ -5159,22 +5276,30 @@ export default function HomePage() {
                   <input 
                     type="password" 
                     placeholder="Insira sua senha aqui" 
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    required
                     className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-gray-900"
                   />
                 </div>
-              </div>
 
-              {/* Password Strength Indicator */}
-              <div className="flex items-center gap-1.5 mb-6">
-                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
-                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
-                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
-                <div className="flex-1 h-1 bg-gray-200 rounded-full"></div>
-              </div>
+                {/* Password Strength Indicator */}
+                <div className="flex items-center gap-1.5 py-1">
+                  <div className={`flex-1 h-1 rounded-full ${authPassword.length >= 6 ? "bg-green-500" : "bg-gray-200"}`} title="Mínimo de 6 caracteres"></div>
+                  <div className={`flex-1 h-1 rounded-full ${authPassword.length >= 8 ? "bg-green-500" : "bg-gray-200"}`} title="Mínimo de 8 caracteres"></div>
+                  <div className={`flex-1 h-1 rounded-full ${/[A-Z]/.test(authPassword) ? "bg-green-500" : "bg-gray-200"}`} title="Contém letra maiúscula"></div>
+                  <div className={`flex-1 h-1 rounded-full ${/[0-9]/.test(authPassword) ? "bg-green-500" : "bg-gray-200"}`} title="Contém número"></div>
+                </div>
 
-              <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-sm text-sm mb-6">
-                Criar uma conta
-              </button>
+                <button 
+                  type="submit"
+                  disabled={isAuthLoading}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold py-3.5 rounded-xl transition-all shadow-sm text-sm mb-6 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {isAuthLoading && <Loader2 className="w-4.5 h-4.5 animate-spin" />}
+                  Criar uma conta
+                </button>
+              </form>
 
               <div className="flex items-center justify-center gap-4 mb-6">
                 <div className="flex-1 h-px bg-gray-200"></div>
@@ -5182,7 +5307,7 @@ export default function HomePage() {
                 <div className="flex-1 h-px bg-gray-200"></div>
               </div>
 
-              <button onClick={handleGoogleLogin} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-6 shadow-sm">
+              <button type="button" onClick={handleGoogleLogin} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-3 mb-6 shadow-sm cursor-pointer">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                   <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -5194,7 +5319,7 @@ export default function HomePage() {
 
               <div className="text-center mb-6">
                 <span className="text-xs text-gray-900 font-medium">Eu já tenho uma conta </span>
-                <button onClick={() => { setShowSignupModal(false); setShowLoginModal(true); }} className="text-xs text-indigo-500 font-medium hover:underline">Entrar</button>
+                <button type="button" onClick={openLoginModal} className="text-xs text-indigo-500 font-medium hover:underline">Entrar</button>
               </div>
 
               <div className="text-center mt-2 border-t border-gray-100 pt-6">
