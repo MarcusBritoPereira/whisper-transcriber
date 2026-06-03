@@ -46,7 +46,8 @@ import {
   CreditCard,
   Users,
   HelpCircle,
-  LogOut
+  LogOut,
+  Lock
 } from "lucide-react";
 import axios from "axios";
 
@@ -61,6 +62,7 @@ interface Segment {
 interface TranscriptionResult {
   text: string;
   segments: Segment[];
+  is_blurred?: boolean;
 }
 
 type TabMode = "local" | "online";
@@ -125,6 +127,7 @@ export default function HomePage() {
   const [subscriptionData, setSubscriptionData] = useState<any>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [checkoutStep, setCheckoutStep] = useState<"plans" | "form" | "pix" | "boleto" | "success">("plans");
+  const [selectedCheckoutPlan, setSelectedCheckoutPlan] = useState<"annual" | "trial">("annual");
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelStep, setCancelStep] = useState<"confirm" | "final">("confirm");
   const [isCancelling, setIsCancelling] = useState(false);
@@ -314,6 +317,15 @@ export default function HomePage() {
   };
 
   React.useEffect(() => {
+    // Generate guest ID if not present
+    if (typeof window !== "undefined") {
+      let guestId = localStorage.getItem("guest_tenant_id");
+      if (!guestId) {
+        guestId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
+        localStorage.setItem("guest_tenant_id", guestId);
+      }
+    }
+
     // Check active session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -329,6 +341,11 @@ export default function HomePage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.access_token) {
         config.headers.Authorization = `Bearer ${session.access_token}`;
+      } else {
+        const guestId = localStorage.getItem("guest_tenant_id");
+        if (guestId) {
+          config.headers["X-Guest-Tenant-Id"] = guestId;
+        }
       }
       return config;
     });
@@ -372,7 +389,7 @@ export default function HomePage() {
     };
   }, [supabase]);
 
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "production" ? "https://api.transcritor.upsystem.cloud" : "http://localhost:8000");
 
   // Subscription Status check and payment redirection parameters
   React.useEffect(() => {
@@ -418,6 +435,37 @@ export default function HomePage() {
       setSubscriptionData(null);
     }
   }, [apiBaseUrl, user]);
+
+  // Claim guest jobs when user logs in
+  React.useEffect(() => {
+    if (user && typeof window !== "undefined") {
+      const guestId = localStorage.getItem("guest_tenant_id");
+      if (guestId) {
+        axios.post(`${apiBaseUrl}/api/v1/jobs/claim`, { guest_id: guestId })
+          .then((res) => {
+            console.log("Claimed guest jobs:", res.data);
+            localStorage.removeItem("guest_tenant_id");
+            loadHistory();
+          })
+          .catch((err) => {
+            console.error("Failed to claim guest jobs:", err);
+          });
+      }
+    }
+  }, [user, apiBaseUrl]);
+
+  // Auto-trigger pending checkout after successful signup/login
+  React.useEffect(() => {
+    if (user && typeof window !== "undefined") {
+      const pendingPlan = localStorage.getItem("pending_checkout_plan");
+      if (pendingPlan === "trial" || pendingPlan === "annual") {
+        setSelectedCheckoutPlan(pendingPlan as "trial" | "annual");
+        setShowUpgradeModal(true);
+        setCheckoutStep("plans");
+        localStorage.removeItem("pending_checkout_plan");
+      }
+    }
+  }, [user]);
 
   const handleCancelSubscription = async () => {
     setIsCancelling(true);
@@ -1131,7 +1179,8 @@ export default function HomePage() {
         complement: checkoutForm.complement || null,
         district: checkoutForm.district || null,
         city: checkoutForm.city || null,
-        state: checkoutForm.state || null
+        state: checkoutForm.state || null,
+        plan_type: selectedCheckoutPlan
       };
 
       if (checkoutForm.payment_method === "credit_card") {
@@ -1179,7 +1228,8 @@ export default function HomePage() {
         last_name: profileLastName || "Transcritor",
         email: user?.email || "",
         phone: (profilePhoneArea && profilePhoneNumber) ? `${profilePhoneArea}${profilePhoneNumber}` : null,
-        payment_method: "pix"
+        payment_method: "pix",
+        plan_type: selectedCheckoutPlan
       };
 
       const response = await axios.post(`${apiBaseUrl}/api/v1/payments/checkout`, payload, {
@@ -1652,6 +1702,29 @@ export default function HomePage() {
                               </div>
                             </div>
                           ))}
+
+                          {result.is_blurred && (
+                            <div className="space-y-4 opacity-40 select-none pointer-events-none blur-sm mt-4">
+                              <div className="flex items-start gap-4 p-2.5 rounded-xl">
+                                <span className="text-[10px] font-bold text-indigo-400 bg-indigo-50 px-2 py-1 rounded-md shrink-0">
+                                  30:05
+                                </span>
+                                <div className="flex-1 space-y-2">
+                                  <div className="h-3 bg-gray-300 rounded w-1/4"></div>
+                                  <div className="h-3 bg-gray-200 rounded w-3/4"></div>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-4 p-2.5 rounded-xl">
+                                <span className="text-[10px] font-bold text-indigo-400 bg-indigo-50 px-2 py-1 rounded-md shrink-0">
+                                  30:22
+                                </span>
+                                <div className="flex-1 space-y-2">
+                                  <div className="h-3 bg-gray-300 rounded w-1/5"></div>
+                                  <div className="h-3 bg-gray-200 rounded w-5/6"></div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -1734,6 +1807,37 @@ export default function HomePage() {
                               <p className="text-xs text-gray-700 font-medium leading-relaxed whitespace-pre-wrap">{summaryText}</p>
                             </div>
                           )}
+                        </div>
+                      )}
+                      {result.is_blurred && (
+                        <div className="relative mt-8 p-6 bg-white border border-amber-200 rounded-2xl shadow-lg flex flex-col md:flex-row items-center justify-between gap-6 overflow-hidden">
+                          <div className="absolute top-0 left-0 w-2 h-full bg-amber-500"></div>
+                          <div className="flex items-start gap-4 pl-2">
+                            <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center shrink-0 border border-amber-100">
+                              <Lock className="w-5 h-5" />
+                            </div>
+                            <div className="text-left">
+                              <h4 className="text-sm font-bold text-gray-900 mb-1">Destrave a Transcrição Completa</h4>
+                              <p className="text-xs text-gray-500 font-medium max-w-xl leading-relaxed">
+                                Este áudio passou de 30 minutos. Desbloqueie todo o conteúdo restante e ganhe 7 dias de acesso premium completo por apenas R$ 5,00.
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              if (!user) {
+                                localStorage.setItem("pending_checkout_plan", "trial");
+                                openSignupModal();
+                              } else {
+                                setSelectedCheckoutPlan("trial");
+                                setCheckoutStep("plans");
+                                setShowUpgradeModal(true);
+                              }
+                            }}
+                            className="whitespace-nowrap px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl shadow-md transition-all shrink-0 cursor-pointer animate-[pulse_2s_infinite]"
+                          >
+                            Desbloquear Agora (R$ 5,00)
+                          </button>
                         </div>
                       )}
                     </div>
@@ -4089,33 +4193,54 @@ export default function HomePage() {
 
             <div className="space-y-6 max-h-[500px] overflow-y-auto pr-4 custom-scrollbar">
               {activeResultTab === "transcricao" && (
-                result.segments.map((segment, idx) => {
-                  const mins = Math.floor(segment.start / 60).toString().padStart(2, '0');
-                  const secs = Math.floor(segment.start % 60).toString().padStart(2, '0');
-                  const isActive = isPlaying && currentTime >= segment.start - 0.2 && currentTime <= segment.end + 0.2;
-                  return (
-                    <div 
-                      key={idx} 
-                      onClick={() => {
-                        if (audioRef.current && activeResultTab === "transcricao") {
-                          audioRef.current.currentTime = segment.start;
-                          audioRef.current.play();
-                          setIsPlaying(true);
-                        }
-                      }}
-                      className={`flex gap-3 text-[14px] p-2.5 rounded-xl cursor-pointer transition-colors ${isActive ? 'bg-indigo-50' : 'hover:bg-gray-50/50'}`}
-                    >
-                      {showTimestamps && (
-                        <span className={`font-semibold shrink-0 transition-colors ${isActive ? 'text-indigo-600' : 'text-gray-400'}`}>
-                          ({mins}:{secs})
-                        </span>
-                      )}
-                      <p className={`font-medium leading-relaxed transition-colors ${isActive ? 'text-indigo-900 font-bold' : 'text-[#64748b]'}`}>
-                        {segment.text}
-                      </p>
+                <>
+                  {result.segments.map((segment, idx) => {
+                    const mins = Math.floor(segment.start / 60).toString().padStart(2, '0');
+                    const secs = Math.floor(segment.start % 60).toString().padStart(2, '0');
+                    const isActive = isPlaying && currentTime >= segment.start - 0.2 && currentTime <= segment.end + 0.2;
+                    return (
+                      <div 
+                        key={idx} 
+                        onClick={() => {
+                          if (audioRef.current && activeResultTab === "transcricao") {
+                            audioRef.current.currentTime = segment.start;
+                            audioRef.current.play();
+                            setIsPlaying(true);
+                          }
+                        }}
+                        className={`flex gap-3 text-[14px] p-2.5 rounded-xl cursor-pointer transition-colors ${isActive ? 'bg-indigo-50' : 'hover:bg-gray-50/50'}`}
+                      >
+                        {showTimestamps && (
+                          <span className={`font-semibold shrink-0 transition-colors ${isActive ? 'text-indigo-600' : 'text-gray-400'}`}>
+                            ({mins}:{secs})
+                          </span>
+                        )}
+                        <p className={`font-medium leading-relaxed transition-colors ${isActive ? 'text-indigo-900 font-bold' : 'text-[#64748b]'}`}>
+                          {segment.text}
+                        </p>
+                      </div>
+                    );
+                  })}
+
+                  {result.is_blurred && (
+                    <div className="space-y-4 opacity-40 select-none pointer-events-none blur-sm mt-4">
+                      <div className="flex gap-3 text-[14px] p-2.5 rounded-xl">
+                        {showTimestamps && <span className="font-semibold text-gray-400 shrink-0">(30:05)</span>}
+                        <div className="flex-1 space-y-2">
+                          <div className="h-3 bg-gray-300 rounded w-1/4"></div>
+                          <div className="h-3 bg-gray-200 rounded w-3/4"></div>
+                        </div>
+                      </div>
+                      <div className="flex gap-3 text-[14px] p-2.5 rounded-xl">
+                        {showTimestamps && <span className="font-semibold text-gray-400 shrink-0">(30:22)</span>}
+                        <div className="flex-1 space-y-2">
+                          <div className="h-3 bg-gray-300 rounded w-1/5"></div>
+                          <div className="h-3 bg-gray-200 rounded w-5/6"></div>
+                        </div>
+                      </div>
                     </div>
-                  );
-                })
+                  )}
+                </>
               )}
 
               {activeResultTab === "editar" && (
@@ -4206,6 +4331,38 @@ export default function HomePage() {
                 </div>
               )}
             </div>
+
+            {result.is_blurred && (
+              <div className="relative mt-4 p-5 bg-white border border-amber-200 rounded-2xl shadow-md flex flex-col sm:flex-row items-center justify-between gap-4 overflow-hidden z-10">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-500"></div>
+                <div className="flex items-start gap-3 pl-1.5">
+                  <div className="w-8 h-8 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center shrink-0 border border-amber-100">
+                    <Lock className="w-4.5 h-4.5" />
+                  </div>
+                  <div className="text-left">
+                    <h4 className="text-xs font-bold text-gray-900 mb-0.5">Destrave a Transcrição Completa</h4>
+                    <p className="text-[11px] text-gray-500 font-medium max-w-md leading-relaxed">
+                      Desbloqueie todo o conteúdo restante e ganhe 7 dias de acesso premium completo por apenas R$ 5,00.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if (!user) {
+                      localStorage.setItem("pending_checkout_plan", "trial");
+                      openSignupModal();
+                    } else {
+                      setSelectedCheckoutPlan("trial");
+                      setCheckoutStep("plans");
+                      setShowUpgradeModal(true);
+                    }
+                  }}
+                  className="whitespace-nowrap px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] rounded-lg shadow-sm transition-all shrink-0 cursor-pointer animate-[pulse_2s_infinite]"
+                >
+                  Desbloquear (R$ 5,00)
+                </button>
+              </div>
+            )}
 
             {/* Audio Player Footer */}
             {audioUrl && (
@@ -4350,20 +4507,68 @@ export default function HomePage() {
                   <h4 className="text-[20px] font-black text-gray-900 mb-1">Whisper Transcritor Premium</h4>
                   <p className="text-xs text-gray-500 font-medium mb-6">Acesso ilimitado à inteligência artificial de transcrição mais precisa do mundo.</p>
                   
-                  {/* Pricing Card */}
-                  <div className="w-full bg-[#FBFDFF] border border-indigo-100/80 rounded-2xl p-6 mb-6 shadow-[0_4px_15px_rgba(99,102,241,0.02)] relative overflow-hidden">
-                    <div className="absolute top-0 right-0 bg-amber-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider">Melhor Valor</div>
-                    <span className="text-[13px] font-bold text-indigo-500 uppercase tracking-wider">Plano Anual</span>
-                    <div className="flex items-baseline justify-center gap-1.5 mt-2 mb-4">
-                      <span className="text-gray-400 text-sm font-semibold">R$</span>
-                      <span className="text-[36px] font-black text-gray-900 tracking-tight">150,00</span>
-                      <span className="text-gray-400 text-xs font-semibold">/ ano</span>
+                  {/* Pricing Cards Selection */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full mb-6">
+                    {/* Trial Option Card */}
+                    <div 
+                      onClick={() => setSelectedCheckoutPlan("trial")}
+                      className={`cursor-pointer rounded-2xl p-5 border transition-all text-left relative overflow-hidden flex flex-col justify-between ${
+                        selectedCheckoutPlan === "trial" 
+                          ? "border-amber-500 bg-amber-50/20 shadow-md shadow-amber-500/5" 
+                          : "border-gray-200 bg-white hover:border-gray-300"
+                      }`}
+                    >
+                      {selectedCheckoutPlan === "trial" && (
+                        <div className="absolute top-0 right-0 bg-amber-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg uppercase tracking-wider">
+                          Selecionado
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">Teste de 7 Dias</span>
+                        <h5 className="text-lg font-bold text-gray-900 mt-1">Plano de Teste</h5>
+                        <p className="text-[11px] text-gray-500 font-medium mt-1 mb-3">Experimente todos os recursos por 7 dias completos.</p>
+                      </div>
+                      <div className="flex items-baseline gap-1 mt-auto">
+                        <span className="text-gray-400 text-xs font-semibold">R$</span>
+                        <span className="text-2xl font-black text-gray-900 tracking-tight">5,00</span>
+                        <span className="text-gray-400 text-[10px] font-semibold">/ único</span>
+                      </div>
                     </div>
-                    
-                    <div className="border-t border-gray-100 pt-4 space-y-3.5 text-left text-xs font-medium text-gray-600">
+
+                    {/* Annual Option Card */}
+                    <div 
+                      onClick={() => setSelectedCheckoutPlan("annual")}
+                      className={`cursor-pointer rounded-2xl p-5 border transition-all text-left relative overflow-hidden flex flex-col justify-between ${
+                        selectedCheckoutPlan === "annual" 
+                          ? "border-amber-500 bg-amber-50/20 shadow-md shadow-amber-500/5" 
+                          : "border-gray-200 bg-white hover:border-gray-300"
+                      }`}
+                    >
+                      {selectedCheckoutPlan === "annual" && (
+                        <div className="absolute top-0 right-0 bg-amber-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg uppercase tracking-wider">
+                          Selecionado
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-[11px] font-bold text-indigo-500 uppercase tracking-wider">Acesso Anual</span>
+                        <h5 className="text-lg font-bold text-gray-900 mt-1">Plano Anual</h5>
+                        <p className="text-[11px] text-gray-500 font-medium mt-1 mb-3">Economize e garanta transcrições ilimitadas por um ano inteiro.</p>
+                      </div>
+                      <div className="flex items-baseline gap-1 mt-auto">
+                        <span className="text-gray-400 text-xs font-semibold">R$</span>
+                        <span className="text-2xl font-black text-gray-900 tracking-tight">150,00</span>
+                        <span className="text-gray-400 text-[10px] font-semibold">/ ano</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Plan Features */}
+                  <div className="w-full bg-[#FBFDFF] border border-gray-100 rounded-2xl p-5 mb-6 text-left text-xs font-medium text-gray-600">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block mb-3 font-semibold">Recursos Incluídos:</span>
+                    <div className="space-y-3">
                       <div className="flex items-center gap-2.5">
-                        <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
-                        <span>Transcrições ilimitadas sem restrição de minutos</span>
+                        <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                        <span>Transcrições ilimitadas {selectedCheckoutPlan === "trial" ? "durante o período de teste" : "sem restrição de minutos"}</span>
                       </div>
                       <div className="flex items-center gap-2.5">
                         <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
@@ -4373,18 +4578,16 @@ export default function HomePage() {
                         <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
                         <span>Tradução simultânea e restauração de áudio</span>
                       </div>
-                      <div className="flex items-center gap-2.5">
-                        <CheckCircle2 className="w-4.5 h-4.5 text-green-500 shrink-0" />
-                        <span>Suporte premium e maior velocidade de fila</span>
-                      </div>
                     </div>
                   </div>
 
                   <button 
                     onClick={() => setCheckoutStep("form")}
-                    className="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm rounded-xl shadow-md hover:from-amber-600 hover:to-orange-600 transition-all flex items-center justify-center gap-2"
+                    className="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm rounded-xl shadow-md hover:from-amber-600 hover:to-orange-600 transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    Quero Assinar Premium
+                    {selectedCheckoutPlan === "trial" 
+                      ? "Desbloquear 7 Dias por R$ 5,00" 
+                      : "Quero Assinar Plano Anual (R$ 150,00)"}
                   </button>
                 </div>
               )}

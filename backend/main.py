@@ -78,6 +78,7 @@ class SummarizeRequest(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
+    plan_type: Optional[str] = "annual"  # annual, trial
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[str] = None
@@ -143,6 +144,12 @@ class SupportTicketCreate(BaseModel):
     message: str
 
 
+class ClaimJobsRequest(BaseModel):
+    guest_id: str
+
+
+
+
 
 # Abacate Pay Helpers
 def make_abacate_request(method: str, path: str, payload: dict = None) -> dict:
@@ -172,32 +179,37 @@ def make_abacate_request(method: str, path: str, payload: dict = None) -> dict:
         return {"error": {"message": str(e)}}
 
 
-def get_or_create_abacate_product() -> str:
+def get_or_create_abacate_product(plan_type: str = "annual") -> str:
+    external_id = "upscribe_annual_premium" if plan_type == "annual" else "upscribe_trial_7days"
+    name = "Assinatura Anual Whisper Transcritor" if plan_type == "annual" else "Teste Premium 7 Dias"
+    price = 15000 if plan_type == "annual" else 500
+    description = "Acesso premium ilimitado ao transcritor por 1 ano." if plan_type == "annual" else "Acesso premium ilimitado ao transcritor por 7 dias."
+    
     # 1. Fetch all products
     products_res = make_abacate_request("GET", "/products/list")
     product_id = None
     
     if products_res and "data" in products_res:
         for prod in products_res.get("data", []):
-            if prod.get("externalId") == "upscribe_annual_premium":
+            if prod.get("externalId") == external_id:
                 product_id = prod.get("id")
                 break
                 
     # 2. Create product if it doesn't exist
     if not product_id:
-        logger.info("[Abacate Pay] Creating premium product dynamically...")
+        logger.info(f"[Abacate Pay] Creating {plan_type} product dynamically...")
         create_payload = {
-            "externalId": "upscribe_annual_premium",
-            "name": "Assinatura Anual Whisper Transcritor",
-            "price": 15000,
+            "externalId": external_id,
+            "name": name,
+            "price": price,
             "currency": "BRL",
-            "description": "Acesso premium ilimitado ao transcritor por 1 ano."
+            "description": description
         }
         create_res = make_abacate_request("POST", "/products/create", create_payload)
         product_id = create_res.get("data", {}).get("id")
         
     if not product_id:
-        raise HTTPException(status_code=500, detail="Não foi possível obter ou criar o produto no Abacate Pay")
+        raise HTTPException(status_code=500, detail=f"Não foi possível obter ou criar o produto {plan_type} no Abacate Pay")
         
     return product_id
 
@@ -301,6 +313,8 @@ def make_appmax_post(path: str, payload: dict, token: str) -> dict:
 def get_subscription_level(tenant_id: str, db: Session) -> str:
     if tenant_id in {"tenantA", "tenantB", "tenant_default", "tenant_secondary"}:
         return "premium"
+    if tenant_id.startswith("guest_"):
+        return "guest"
     sub = db.query(TenantSubscription).filter(TenantSubscription.tenant_id == tenant_id).first()
     if sub and sub.status == "active":
         if sub.expires_at:
@@ -564,6 +578,12 @@ async def transcribe_audio_sync(
         if daily_count >= 5:
             raise HTTPException(status_code=403, detail="Limite de 5 envios diários atingido no período de teste (Trial). Faça upgrade para Premium.")
 
+    if sub_level == "guest":
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        daily_count = db.query(Job).filter(Job.tenant_id == tenant_id, Job.created_at >= today_start).count()
+        if daily_count >= 2:
+            raise HTTPException(status_code=403, detail="Limite de 2 transcrições diárias atingido para visitantes. Crie uma conta ou assine para continuar.")
+
     if not file and not url:
         raise HTTPException(status_code=400, detail="Either file or url must be provided")
 
@@ -639,6 +659,12 @@ async def transcribe_audio_job(
         daily_count = db.query(Job).filter(Job.tenant_id == tenant_id, Job.created_at >= today_start).count()
         if daily_count >= 5:
             raise HTTPException(status_code=403, detail="Limite de 5 envios diários atingido no período de teste (Trial). Faça upgrade para Premium.")
+
+    if sub_level == "guest":
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        daily_count = db.query(Job).filter(Job.tenant_id == tenant_id, Job.created_at >= today_start).count()
+        if daily_count >= 2:
+            raise HTTPException(status_code=403, detail="Limite de 2 transcrições diárias atingido para visitantes. Crie uma conta ou assine para continuar.")
 
     if not file and not url:
         raise HTTPException(status_code=400, detail="Either file or url must be provided")
@@ -770,7 +796,21 @@ def job_result(
     result = json.loads(job.result_json)
     segments = result.get("segments", [])
 
+    sub_level = get_subscription_level(tenant_id, db)
+    is_premium = (sub_level == "premium")
+
+    is_blurred = False
+    if not is_premium:
+        original_count = len(segments)
+        segments = [s for s in segments if float(s.get("end", 0)) <= 1800.0]
+        if len(segments) < original_count:
+            is_blurred = True
+        if is_blurred:
+            result["text"] = " ".join([s.get("text", "") for s in segments]).strip()
+
     if format == "json":
+        result["segments"] = segments
+        result["is_blurred"] = is_blurred
         return JSONResponse(content=result)
     if format == "txt":
         return PlainTextResponse(result.get("text", ""), media_type="text/plain")
@@ -1046,7 +1086,8 @@ async def handle_checkout(
     db: Session = Depends(get_db)
 ):
     # 1. Get or create product in Abacate Pay
-    product_id = get_or_create_abacate_product()
+    plan_type = req.plan_type or "annual"
+    product_id = get_or_create_abacate_product(plan_type)
     
     # 2. Create Hosted Checkout Session
     customer_data = {}
@@ -1114,7 +1155,7 @@ async def handle_checkout(
         sub = TenantSubscription(
             tenant_id=tenant_id,
             status="inactive",
-            plan_type="annual",
+            plan_type=plan_type,
             customer_id=None,
             last_order_id=str(checkout_id),
             created_at=now_iso,
@@ -1123,6 +1164,7 @@ async def handle_checkout(
         db.add(sub)
     else:
         sub.last_order_id = str(checkout_id)
+        sub.plan_type = plan_type
         sub.updated_at = now_iso
     db.commit()
 
@@ -1142,6 +1184,23 @@ async def handle_checkout(
         "checkout_url": checkout_url,
         "checkout_id": checkout_id
     }
+
+
+@app.post("/api/v1/jobs/claim")
+def claim_guest_jobs(
+    req: ClaimJobsRequest,
+    tenant_id: str = Depends(get_tenant_id),
+    db: Session = Depends(get_db)
+):
+    guest_tenant = f"guest_{req.guest_id.strip()}"
+    jobs = db.query(Job).filter(Job.tenant_id == guest_tenant).all()
+    count = len(jobs)
+    for job in jobs:
+        job.tenant_id = tenant_id
+        job.workspace_id = tenant_id
+    db.commit()
+    logger.info(f"Tenant {tenant_id} claimed {count} jobs from guest {guest_tenant}")
+    return {"success": True, "claimed_jobs_count": count}
 
 
 @app.post("/api/v1/payments/cancel")

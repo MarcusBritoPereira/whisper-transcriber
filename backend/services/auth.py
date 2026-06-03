@@ -122,6 +122,7 @@ def get_tenant_id(
     request: Request,
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None),
+    x_guest_tenant_id: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ) -> str:
     # 1. Try JWT Bearer authentication first (Supabase Auth)
@@ -139,4 +140,10 @@ def get_tenant_id(
     if x_api_key and not settings.ENABLE_LEGACY_API_KEYS:
         raise HTTPException(status_code=401, detail="Legacy API key authentication is disabled")
         
-    raise HTTPException(status_code=401, detail="Authentication credentials missing (Bearer JWT or X-API-Key)")
+    # 3. Fallback to Guest/Anonymous Tenant ID
+    if x_guest_tenant_id:
+        clean_guest = x_guest_tenant_id.strip()
+        if clean_guest:
+            return f"guest_{clean_guest}"
+        
+    raise HTTPException(status_code=401, detail="Authentication credentials missing (Bearer JWT, X-API-Key, or X-Guest-Tenant-Id)")

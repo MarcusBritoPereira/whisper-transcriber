@@ -119,7 +119,8 @@ def process_abacate_webhook_task(self, event_id: str, payload_data: dict):
         # Handle Abacate Pay Webhook Events
         if event_name in ["checkout.completed", "subscription.completed", "subscription.renewed"]:
             subscription.status = "active"
-            subscription.expires_at = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
+            days = 7 if subscription.plan_type == "trial" else 365
+            subscription.expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
             subscription.customer_id = str(billing_data.get("customerId") or "")
             subscription.last_order_id = str(billing_data.get("id") or "")
             subscription.updated_at = now_iso
