@@ -27,7 +27,7 @@ from database import get_db, engine, Base
 from models.jobs import Job
 from models.payment import TenantSubscription, AppmaxWebhookLog
 from models.workspace import Folder, Workspace, User, WorkspaceMember
-from services.auth import get_tenant_id, decode_jwt_token
+from services.auth import get_tenant_id, decode_jwt_token, sync_supabase_user, validate_api_key
 from services.storage import upload_file, delete_file, ensure_bucket_exists, generate_presigned_download_url
 from services.transcriber import transcriber_service
 from services.email import send_welcome_email, send_cancellation_email
@@ -58,6 +58,9 @@ os.makedirs(settings.RESULTS_DIR, exist_ok=True)
 _rate_limit_window: dict[str, list[float]] = {}
 _rate_limit_lock = threading.Lock()
 _redis_rate_limit_client = None
+
+DEV_BILLING_TENANTS = {"tenantA", "tenantB", "tenant_default", "tenant_secondary"}
+ALLOWED_MEDIA_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".opus", ".mp4", ".mpeg", ".webm")
 
 
 # Pydantic Schemas
@@ -311,7 +314,7 @@ def make_appmax_post(path: str, payload: dict, token: str) -> dict:
 
 
 def get_subscription_level(tenant_id: str, db: Session) -> str:
-    if tenant_id in {"tenantA", "tenantB", "tenant_default", "tenant_secondary"}:
+    if tenant_id in DEV_BILLING_TENANTS or settings.DEV_MODE:
         return "premium"
     if tenant_id.startswith("guest_"):
         return "guest"
@@ -326,7 +329,46 @@ def get_subscription_level(tenant_id: str, db: Session) -> str:
                 pass
         else:
             return "premium"
-    return "trial"
+    return "inactive"
+
+
+def require_active_entitlement(tenant_id: str, db: Session, feature: str) -> str:
+    """Centralized production billing gate for costly SaaS features."""
+    sub_level = get_subscription_level(tenant_id, db)
+    if sub_level != "premium":
+        raise HTTPException(
+            status_code=402,
+            detail=f"Assinatura requerida para usar {feature}. Faça upgrade para Premium.",
+        )
+    return sub_level
+
+
+def validate_upload_metadata(file: UploadFile) -> None:
+    filename = file.filename or "audio"
+    content_type = file.content_type or ""
+    if file.size and file.size > settings.MAX_FILE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large (max {settings.MAX_FILE_MB}MB)")
+    if not filename.lower().endswith(ALLOWED_MEDIA_EXTENSIONS) and not content_type.startswith(("audio/", "video/")):
+        raise HTTPException(status_code=400, detail=f"Invalid file type: {content_type}")
+
+
+def require_workspace_admin(tenant_id: str, authorization: Optional[str], db: Session) -> None:
+    if tenant_id in DEV_BILLING_TENANTS:
+        return
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token de autorização ausente")
+    token = authorization.split("Bearer ")[1].strip()
+    payload = decode_jwt_token(token)
+    supabase_id = payload.get("sub") or payload.get("id")
+    user = db.query(User).filter(User.supabase_id == supabase_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    member = db.query(WorkspaceMember).filter(
+        WorkspaceMember.workspace_id == tenant_id,
+        WorkspaceMember.user_id == user.id,
+    ).first()
+    if not member or member.role not in {"admin", "owner"}:
+        raise HTTPException(status_code=403, detail="Permissão de administrador do workspace requerida")
 
 
 # Helper Utilities
@@ -569,14 +611,7 @@ async def transcribe_audio_sync(
     db: Session = Depends(get_db),
 ):
     check_rate_limit(f"{tenant_id}:{request.client.host if request.client else 'unknown'}")
-    sub_level = get_subscription_level(tenant_id, db)
-
-    # Check daily upload limit for trial users
-    if sub_level == "trial":
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        daily_count = db.query(Job).filter(Job.tenant_id == tenant_id, Job.created_at >= today_start).count()
-        if daily_count >= 5:
-            raise HTTPException(status_code=403, detail="Limite de 5 envios diários atingido no período de teste (Trial). Faça upgrade para Premium.")
+    sub_level = require_active_entitlement(tenant_id, db, "transcrição")
 
     if sub_level == "guest":
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -591,14 +626,8 @@ async def transcribe_audio_sync(
     temp_path = ""
 
     if file:
-        if file.size and file.size > settings.MAX_FILE_MB * 1024 * 1024:
-            raise HTTPException(status_code=413, detail=f"File too large (max {settings.MAX_FILE_MB}MB)")
-
-        allowed_extensions = (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".opus", ".mp4", ".mpeg", ".webm")
+        validate_upload_metadata(file)
         filename = file.filename or "audio"
-        if not filename.lower().endswith(allowed_extensions) and not (file.content_type or "").startswith(("audio/", "video/")):
-            raise HTTPException(status_code=400, detail=f"Invalid file type: {file.content_type}")
-
         ext = os.path.splitext(filename)[1] or ".mp3"
         temp_path = os.path.join(settings.UPLOAD_DIR, f"{file_id}{ext}")
         with open(temp_path, "wb") as buffer:
@@ -651,14 +680,7 @@ async def transcribe_audio_job(
     db: Session = Depends(get_db),
 ):
     check_rate_limit(f"{tenant_id}:{request.client.host if request.client else 'unknown'}")
-    sub_level = get_subscription_level(tenant_id, db)
-
-    # Check daily upload limit for trial users
-    if sub_level == "trial":
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        daily_count = db.query(Job).filter(Job.tenant_id == tenant_id, Job.created_at >= today_start).count()
-        if daily_count >= 5:
-            raise HTTPException(status_code=403, detail="Limite de 5 envios diários atingido no período de teste (Trial). Faça upgrade para Premium.")
+    sub_level = require_active_entitlement(tenant_id, db, "transcrição")
 
     if sub_level == "guest":
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -675,6 +697,7 @@ async def transcribe_audio_job(
     s3_key = f"uploads/{sub_level}/{tenant_id}/{job_id}"
 
     if file:
+        validate_upload_metadata(file)
         filename = file.filename or "audio"
         ext = os.path.splitext(filename)[1] or ".mp3"
         temp_path = os.path.join(settings.UPLOAD_DIR, f"temp_{job_id}{ext}")
@@ -713,6 +736,12 @@ async def transcribe_audio_job(
         "restore_audio": restore_audio,
         "mode": mode,
     }
+
+    if folder_id:
+        folder = db.query(Folder).filter(Folder.id == folder_id, Folder.workspace_id == tenant_id).first()
+        if not folder:
+            delete_file(s3_key)
+            raise HTTPException(status_code=404, detail="Target folder not found")
 
     # 2. Persist metadata record in PostgreSQL DB
     now = utc_now_iso()
@@ -964,7 +993,14 @@ def move_job(
 
 
 @app.post("/translate_text")
-async def translate_text_endpoint(req: TranslateRequest):
+async def translate_text_endpoint(
+    req: TranslateRequest,
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+):
+    check_rate_limit(f"translate:{tenant_id}:{request.client.host if request.client else 'unknown'}")
+    require_active_entitlement(tenant_id, db, "tradução")
     try:
         from deep_translator import GoogleTranslator
 
@@ -980,7 +1016,14 @@ async def translate_text_endpoint(req: TranslateRequest):
 
 
 @app.post("/summarize")
-async def summarize_endpoint(req: SummarizeRequest):
+async def summarize_endpoint(
+    req: SummarizeRequest,
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+):
+    check_rate_limit(f"summarize:{tenant_id}:{request.client.host if request.client else 'unknown'}")
+    require_active_entitlement(tenant_id, db, "resumo")
     try:
         from sumy.parsers.plaintext import PlaintextParser
         from sumy.nlp.tokenizers import Tokenizer
@@ -1001,16 +1044,50 @@ async def summarize_endpoint(req: SummarizeRequest):
         return {"summary": req.text[:500] + "..." if len(req.text) > 500 else req.text}
 
 
+def authenticate_websocket_tenant(websocket: WebSocket) -> str:
+    from database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        authorization = websocket.headers.get("authorization", "")
+        access_token = websocket.query_params.get("access_token")
+        if access_token and not authorization:
+            authorization = f"Bearer {access_token}"
+
+        if authorization.startswith("Bearer "):
+            token = authorization.split("Bearer ")[1].strip()
+            payload = decode_jwt_token(token)
+            tenant_id = sync_supabase_user(payload, db)
+        else:
+            x_api_key = websocket.headers.get("x-api-key")
+            if x_api_key and settings.ENABLE_LEGACY_API_KEYS:
+                tenant_id = validate_api_key(x_api_key)
+            else:
+                raise HTTPException(status_code=401, detail="Authentication credentials missing")
+
+        require_active_entitlement(tenant_id, db, "transcrição em tempo real")
+        return tenant_id
+    finally:
+        db.close()
+
+
 @app.websocket("/ws/transcribe")
 async def websocket_transcribe(websocket: WebSocket):
+    try:
+        tenant_id = authenticate_websocket_tenant(websocket)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
-    logger.info("websocket_connected")
+    logger.info("websocket_connected", extra={"tenant_id": tenant_id})
 
     rolling_buffer = []
     max_chunks = 4
 
     try:
         while True:
+            check_rate_limit(f"ws:{tenant_id}")
             data = await websocket.receive_bytes()
             chunk_id = str(uuid.uuid4())
             chunk_path = os.path.join(settings.UPLOAD_DIR, f"chunk_{chunk_id}.wav")
@@ -1054,7 +1131,7 @@ def get_subscription_status(tenant_id: str = Depends(get_tenant_id), db: Session
         }
 
     # Standard dev/test override for legacy API key tenants
-    if tenant_id in {"tenantA", "tenantB", "tenant_default", "tenant_secondary"}:
+    if tenant_id in DEV_BILLING_TENANTS:
         from datetime import timedelta
         expires = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
         return {
@@ -1211,7 +1288,7 @@ async def cancel_subscription(
 ):
     """Cancel the tenant's active subscription."""
     # Dev tenants cannot be cancelled via this endpoint
-    if tenant_id in {"tenantA", "tenantB", "tenant_default", "tenant_secondary"}:
+    if tenant_id in DEV_BILLING_TENANTS:
         raise HTTPException(status_code=403, detail="Contas de desenvolvimento não podem ser canceladas via API.")
 
     sub = db.query(TenantSubscription).filter(TenantSubscription.tenant_id == tenant_id).first()
@@ -1374,8 +1451,10 @@ def list_workspace_members(
 def invite_workspace_member(
     req: WorkspaceMemberInvite,
     tenant_id: str = Depends(get_tenant_id),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
+    require_workspace_admin(tenant_id, authorization, db)
     email = req.email.strip().lower()
     user = db.query(User).filter(User.email == email).first()
     
@@ -1421,8 +1500,10 @@ def invite_workspace_member(
 def delete_workspace_member(
     member_id: str,
     tenant_id: str = Depends(get_tenant_id),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
+    require_workspace_admin(tenant_id, authorization, db)
     member = db.query(WorkspaceMember).filter(
         WorkspaceMember.id == member_id,
         WorkspaceMember.workspace_id == tenant_id
@@ -1444,8 +1525,10 @@ def delete_workspace_member(
 def update_current_workspace(
     req: WorkspaceUpdate,
     tenant_id: str = Depends(get_tenant_id),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
+    require_workspace_admin(tenant_id, authorization, db)
     workspace = db.query(Workspace).filter(Workspace.id == tenant_id).first()
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace não encontrado")
@@ -1493,15 +1576,19 @@ def delete_user_account(
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
         
-    # Get all memberships to clean up workspaces and records
+    # Get all memberships to clean up workspaces, records and object-storage assets
     memberships = db.query(WorkspaceMember).filter(WorkspaceMember.user_id == user.id).all()
     for m in memberships:
         # If user owns the workspace, delete it
         workspace = db.query(Workspace).filter(Workspace.id == m.workspace_id).first()
         if workspace and workspace.owner_id == user.id:
-            # Delete jobs in this workspace
-            db.query(Job).filter(Job.workspace_id == workspace.id).delete()
-            db.query(Job).filter(Job.tenant_id == workspace.id).delete()
+            jobs = db.query(Job).filter(
+                (Job.workspace_id == workspace.id) | (Job.tenant_id == workspace.id)
+            ).all()
+            for job in jobs:
+                if job.input_path:
+                    delete_file(job.input_path)
+                db.delete(job)
             # Delete workspace (cascades to folders and members)
             db.delete(workspace)
         db.delete(m)

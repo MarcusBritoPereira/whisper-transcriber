@@ -1183,12 +1183,8 @@ export default function HomePage() {
         plan_type: selectedCheckoutPlan
       };
 
-      if (checkoutForm.payment_method === "credit_card") {
-        payload.card_token = "mock_cc_token_from_frontend_" + Math.random().toString(36).substring(7);
-        payload.card_holder_name = checkoutForm.card_holder_name || `${checkoutForm.first_name} ${checkoutForm.last_name}`;
-        payload.card_holder_document = checkoutForm.card_holder_document || checkoutForm.document_number;
-        payload.installments = Number(checkoutForm.installments);
-      }
+      // Pagamento é feito via checkout hospedado/tokenização do gateway;
+      // nunca enviamos dados sensíveis de cartão diretamente pela aplicação.
 
       const response = await axios.post(`${apiBaseUrl}/api/v1/payments/checkout`, payload, {
         signal: controller.signal,
@@ -1263,11 +1259,10 @@ export default function HomePage() {
   const startTranscription = async () => {
     if ((tab === "local" && !file) || (tab === "online" && !url)) return;
     
-    // Billing guard: backend returns active for all users in DEV_MODE
-    // if (subscriptionStatus !== "active") {
-    //   setShowUpgradeModal(true);
-    //   return;
-    // }
+    if (subscriptionStatus !== "active") {
+      setShowUpgradeModal(true);
+      return;
+    }
 
     setIsTranscribing(true);
     setViewMode("transcribe");
@@ -1300,6 +1295,9 @@ export default function HomePage() {
       pollJobStatus(job_id);
     } catch (err: any) {
       console.error("Transcription start failed", err);
+      if (err.response?.status === 402) {
+        setShowUpgradeModal(true);
+      }
       setError(err.response?.data?.detail || "Erro ao iniciar transcrição.");
       setIsTranscribing(false);
     }
@@ -1314,8 +1312,11 @@ export default function HomePage() {
         target_language: targetTranslationLanguage
       });
       setTranslatedText(response.data.translated_text);
-    } catch (err) {
-      alert("Erro ao traduzir o texto.");
+    } catch (err: any) {
+      if (err.response?.status === 402) {
+        setShowUpgradeModal(true);
+      }
+      alert(err.response?.data?.detail || "Erro ao traduzir o texto.");
     } finally {
       setIsProcessingAction(false);
     }
@@ -1329,8 +1330,11 @@ export default function HomePage() {
         text: result.text
       });
       setSummaryText(response.data.summary);
-    } catch (err) {
-      alert("Erro ao resumir o texto.");
+    } catch (err: any) {
+      if (err.response?.status === 402) {
+        setShowUpgradeModal(true);
+      }
+      alert(err.response?.data?.detail || "Erro ao resumir o texto.");
     } finally {
       setIsProcessingAction(false);
     }
@@ -4698,68 +4702,13 @@ export default function HomePage() {
                       </button>
                     </div>
 
-                    {/* Credit Card Inputs */}
+                    {/* Hosted checkout notice */}
                     {checkoutForm.payment_method === "credit_card" && (
-                      <div className="space-y-4 bg-gray-50 p-4 rounded-2xl border border-gray-100/50 mt-3 transition-all">
-                        <div>
-                          <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Número do Cartão</label>
-                          <input 
-                            type="text" 
-                            required
-                            value={checkoutForm.card_number}
-                            onChange={(e) => setCheckoutForm({...checkoutForm, card_number: e.target.value})}
-                            placeholder="4444 2222 2222 2222"
-                            className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium outline-none"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Nome impresso no Cartão</label>
-                          <input 
-                            type="text" 
-                            required
-                            value={checkoutForm.card_holder_name}
-                            onChange={(e) => setCheckoutForm({...checkoutForm, card_holder_name: e.target.value})}
-                            placeholder="MARCUS PEREIRA"
-                            className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium outline-none"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-3">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Mês</label>
-                            <input 
-                              type="text" 
-                              required
-                              value={checkoutForm.card_exp_month}
-                              onChange={(e) => setCheckoutForm({...checkoutForm, card_exp_month: e.target.value})}
-                              placeholder="MM"
-                              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium text-center outline-none"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">Ano</label>
-                            <input 
-                              type="text" 
-                              required
-                              value={checkoutForm.card_exp_year}
-                              onChange={(e) => setCheckoutForm({...checkoutForm, card_exp_year: e.target.value})}
-                              placeholder="AA"
-                              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium text-center outline-none"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 mb-1 uppercase">CVV</label>
-                            <input 
-                              type="text" 
-                              required
-                              value={checkoutForm.card_cvv}
-                              onChange={(e) => setCheckoutForm({...checkoutForm, card_cvv: e.target.value})}
-                              placeholder="123"
-                              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-medium text-center outline-none"
-                            />
-                          </div>
-                        </div>
+                      <div className="bg-indigo-50/60 p-4 rounded-2xl border border-indigo-100 mt-3 transition-all">
+                        <p className="text-[12px] text-indigo-700 leading-relaxed">
+                          Seus dados de cartão serão preenchidos somente no checkout seguro do gateway de pagamento.
+                          O Transcritor não coleta nem armazena número, validade ou CVV do cartão.
+                        </p>
                       </div>
                     )}
                   </div>
